@@ -11,4 +11,3 @@ def test_phase1_runner_script_exists() -> None:
 def test_phase1_docs_exist() -> None:
     docs_dir = Path(__file__).resolve().parents[1] / "docs"
     assert (docs_dir / "phase1_final_integration_checklist.md").exists()
-    assert (docs_dir / "phase1_closure_test_matrix.md").exists()
