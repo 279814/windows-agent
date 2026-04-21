@@ -30,7 +30,6 @@ def load_windows_mcp_desktop(source_root: str | Path) -> WindowsMcpBackend:
     if not service_path.exists():
         raise BackendLoadError(f"Windows-MCP service module not found: {service_path}")
 
-
     spec = spec_from_file_location("windows_mcp.desktop.service", service_path)
     if spec is None or spec.loader is None:
         raise BackendLoadError(f"Unable to load module from: {service_path}")

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+
+
 def _configure_windows_event_loop() -> None:
     if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 
 def main() -> int:
     _configure_windows_event_loop()
