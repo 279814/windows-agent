@@ -1,0 +1,2 @@
+[console_scripts]
+desktop-agent-dev = desktop_agent_dev.__main__:main

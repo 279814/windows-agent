@@ -1,0 +1,139 @@
+{
+  "plugins": {
+    "slack": {
+      "enabled": true
+    },
+    "datadog": {
+      "enabled": true
+    },
+    "figma": {
+      "enabled": true
+    },
+    "linear": {
+      "enabled": true
+    },
+    "claude-md-management": {
+      "enabled": true
+    },
+    "code-review": {
+      "enabled": true
+    },
+    "code-simplifier": {
+      "enabled": true
+    },
+    "context7": {
+      "enabled": true
+    },
+    "feature-dev": {
+      "enabled": true
+    },
+    "firecrawl": {
+      "enabled": true
+    },
+    "frontend-design": {
+      "enabled": true
+    },
+    "github": {
+      "enabled": true
+    },
+    "playwright": {
+      "enabled": true
+    },
+    "pr-review-toolkit": {
+      "enabled": true
+    },
+    "pyright-lsp": {
+      "enabled": true
+    },
+    "ralph-loop": {
+      "enabled": true
+    },
+    "skill-creator": {
+      "enabled": true
+    },
+    "supabase": {
+      "enabled": true
+    },
+    "Superpowers": {
+      "enabled": true
+    },
+    "browse": {
+      "enabled": true
+    },
+    "convex": {
+      "enabled": true
+    },
+    "notion-workspace": {
+      "enabled": true
+    },
+    "context7-plugin": {
+      "enabled": true
+    },
+    "create-plugin": {
+      "enabled": true
+    },
+    "functions": {
+      "enabled": true
+    },
+    "cursor-team-kit": {
+      "enabled": true
+    },
+    "compound-engineering": {
+      "enabled": true
+    },
+    "superpowers": {
+      "enabled": true
+    },
+    "parallel": {
+      "enabled": true
+    },
+    "continual-learning": {
+      "enabled": true
+    },
+    "clerk": {
+      "enabled": true
+    },
+    "clickhouse-cursor-plugin": {
+      "enabled": true
+    },
+    "redis-development": {
+      "enabled": true
+    },
+    "huggingface-skills": {
+      "enabled": true
+    },
+    "langfuse": {
+      "enabled": true
+    },
+    "runlayer": {
+      "enabled": true
+    },
+    "render": {
+      "enabled": true
+    },
+    "firetiger": {
+      "enabled": true
+    },
+    "sourcegraph": {
+      "enabled": true
+    },
+    "cli-for-agent": {
+      "enabled": true
+    },
+    "appwrite-plugin": {
+      "enabled": true
+    },
+    "workos": {
+      "enabled": true
+    },
+    "docs-canvas": {
+      "enabled": true
+    },
+    "pr-review-canvas": {
+      "enabled": true
+    },
+    "azure": {
+      "enabled": true
+    }
+  }
+}
