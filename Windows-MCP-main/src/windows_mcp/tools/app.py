@@ -7,7 +7,18 @@ from windows_mcp.analytics import with_analytics
 from fastmcp import Context
 
 
-def _result(tool: str, mode: str, ok: bool, message: str, *, name: str | None, response: str, status: int, pid: int) -> dict[str, Any]:
+def _classify_app_error(response: str) -> str:
+    lowered = response.lower()
+    if "not implemented" in lowered or "not supported" in lowered or "capability" in lowered:
+        return "capability_missing"
+    if "not found" in lowered or "no windows found" in lowered or ("application" in lowered and "not found" in lowered):
+        return "not_found"
+    if "not detected yet" in lowered:
+        return "verification_timeout"
+    return "operation_failed"
+
+
+def _result(tool: str, mode: str, ok: bool, message: str, *, name: str | None, response: str, status: int, pid: int, verified: bool = False, verification_source: str | None = None) -> dict[str, Any]:
     return {
         "ok": ok,
         "tool": tool,
@@ -18,10 +29,12 @@ def _result(tool: str, mode: str, ok: bool, message: str, *, name: str | None, r
             "response": response,
             "status": status,
             "pid": pid,
+            "verified": verified,
+            "verification_source": verification_source,
             "outcome": "success" if ok else "failed",
         },
         "error": None if ok else {
-            "code": "capability_missing" if "not implemented" in response.lower() or "not supported" in response.lower() else "operation_failed",
+            "code": _classify_app_error(response),
             "message": response,
         },
     }
@@ -48,6 +61,17 @@ def register(mcp, *, get_desktop, get_analytics):
         ctx: Context = None,
     ):
         response = get_desktop().app(mode, name, window_loc, window_size)
+        if isinstance(response, dict):
+            data = response.get("data", {}) or {}
+            error = response.get("error")
+            return {
+                "ok": bool(response.get("ok")),
+                "tool": response.get("tool", "App"),
+                "message": response.get("message", ""),
+                "data": data,
+                "error": error,
+            }
+
         if isinstance(response, tuple) and len(response) == 3:
             message, status, pid = response
         else:
@@ -63,4 +87,6 @@ def register(mcp, *, get_desktop, get_analytics):
             response=message,
             status=status,
             pid=pid,
+            verified=False,
+            verification_source=None,
         )

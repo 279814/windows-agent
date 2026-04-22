@@ -508,6 +508,18 @@ class Desktop:
         windows_dict = {window.name: window for window in windows}
         return process.extractOne(name, list(windows_dict.keys()), score_cutoff=60) is not None
 
+    def _classify_app_error(self, response: str, *, verified: bool = False, pid: int = 0) -> str:
+        lowered = response.lower()
+        if "not implemented" in lowered or "not supported" in lowered or "capability" in lowered:
+            return "capability_missing"
+        if "not found" in lowered or "no windows found" in lowered or "application" in lowered and "not found" in lowered:
+            return "not_found"
+        if "not detected yet" in lowered and pid > 0:
+            return "verification_timeout"
+        if verified:
+            return "operation_failed"
+        return "operation_failed"
+
     def _wrap_app_result(
         self,
         *,
@@ -531,7 +543,7 @@ class Desktop:
             "verification_source": verification_source,
             "outcome": outcome,
         }
-        error = None if ok else {"code": "operation_failed", "message": response}
+        error = None if ok else {"code": self._classify_app_error(response, verified=verified, pid=pid), "message": response}
         return {
             "ok": ok,
             "tool": "App",
