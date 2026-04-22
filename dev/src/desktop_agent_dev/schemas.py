@@ -77,6 +77,7 @@ class InputEnvelope(TypedDict, total=False):
     action: str
     ok: bool
     detail: str
+    validation: dict[str, Any]
     payload: dict[str, Any]
 
 
