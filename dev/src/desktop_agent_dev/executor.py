@@ -31,7 +31,65 @@ class Executor:
         if backend is None:
             return {"type": "unknown", "name": None, "found": False, "confidence": 0.0}
 
-        candidates: list[dict[str, Any]] = []
+        def _score_node(node: Any, z_index: int) -> dict[str, Any] | None:
+            box = getattr(node, "bounding_box", None)
+            if box is None:
+                return None
+            left, top, right, bottom = box.left, box.top, box.right, box.bottom
+            if not (left <= x <= right and top <= y <= bottom):
+                return None
+
+            width = max(1, right - left)
+            height = max(1, bottom - top)
+            area = width * height
+            cx = left + width / 2
+            cy = top + height / 2
+            dx = abs(x - cx) / width
+            dy = abs(y - cy) / height
+            center_distance = dx + dy
+            area_score = max(0.0, min(1.0, 1.0 - min(area / 1_000_000.0, 1.0)))
+            center_score = max(0.0, 1.0 - min(center_distance, 1.0))
+            z_score = max(0.0, min(1.0, 1.0 - (z_index / 100.0)))
+            specificity_score = 1.0
+            if getattr(node, "name", None):
+                specificity_score += 0.08
+            if getattr(node, "automation_id", None):
+                specificity_score += 0.12
+            if getattr(node, "class_name", None):
+                specificity_score += 0.04
+            if getattr(node, "role", None):
+                specificity_score += 0.04
+            if width <= 48 and height <= 48:
+                specificity_score += 0.08
+            if width * height < 20_000:
+                specificity_score += 0.04
+            confidence = min(0.99, round((0.45 * center_score) + (0.2 * z_score) + (0.15 * specificity_score) + (0.2 * (1.0 - area_score)), 3))
+            return {
+                "type": getattr(node, "control_type", "unknown") or "unknown",
+                "name": getattr(node, "name", None),
+                "automation_id": getattr(node, "automation_id", None),
+                "class_name": getattr(node, "class_name", None),
+                "role": getattr(node, "role", None),
+                "process_id": getattr(node, "process_id", None),
+                "window_title": getattr(node, "window_title", None),
+                "found": True,
+                "confidence": confidence,
+                "z_index": z_index,
+                "bounds": {"left": left, "top": top, "right": right, "bottom": bottom},
+            }
+
+        def _best_from_nodes(nodes: list[Any]) -> dict[str, Any] | None:
+            scored: list[tuple[float, int, dict[str, Any]]] = []
+            for idx, node in enumerate(nodes):
+                candidate = _score_node(node, idx)
+                if candidate is None:
+                    continue
+                scored.append((candidate["confidence"], -idx, candidate))
+            if not scored:
+                return None
+            scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            return scored[0][2]
+
         tree_state = getattr(backend, "get_tree_state", None)
         if callable(tree_state):
             try:
@@ -39,25 +97,10 @@ class Executor:
             except Exception:
                 state = None
             if state is not None:
-                for node in getattr(state, "interactive_nodes", []) or []:
-                    box = getattr(node, "bounding_box", None)
-                    if box is None:
-                        continue
-                    left, top, right, bottom = box.left, box.top, box.right, box.bottom
-                    if left <= x <= right and top <= y <= bottom:
-                        candidates.append({
-                            "type": getattr(node, "control_type", "unknown") or "unknown",
-                            "name": getattr(node, "name", None),
-                            "automation_id": getattr(node, "automation_id", None),
-                            "class_name": getattr(node, "class_name", None),
-                            "role": getattr(node, "role", None),
-                            "process_id": getattr(node, "process_id", None),
-                            "window_title": getattr(node, "window_title", None),
-                            "found": True,
-                            "confidence": 0.9,
-                        })
-                if candidates:
-                    return candidates[0]
+                best = _best_from_nodes(list(getattr(state, "interactive_nodes", []) or []))
+                if best is not None:
+                    best["source"] = "tree_state"
+                    return best
 
         snapshot = getattr(backend, "get_state", None)
         if callable(snapshot):
@@ -72,23 +115,10 @@ class Executor:
                 state = None
             if state is not None:
                 tree_state_obj = getattr(state, "tree_state", None)
-                for node in getattr(tree_state_obj, "interactive_nodes", []) or []:
-                    box = getattr(node, "bounding_box", None)
-                    if box is None:
-                        continue
-                    left, top, right, bottom = box.left, box.top, box.right, box.bottom
-                    if left <= x <= right and top <= y <= bottom:
-                        return {
-                            "type": getattr(node, "control_type", "unknown") or "unknown",
-                            "name": getattr(node, "name", None),
-                            "automation_id": getattr(node, "automation_id", None),
-                            "class_name": getattr(node, "class_name", None),
-                            "role": getattr(node, "role", None),
-                            "process_id": getattr(node, "process_id", None),
-                            "window_title": getattr(node, "window_title", None),
-                            "found": True,
-                            "confidence": 0.8,
-                        }
+                best = _best_from_nodes(list(getattr(tree_state_obj, "interactive_nodes", []) or []))
+                if best is not None:
+                    best["source"] = "snapshot"
+                    return best
 
         return {"type": "unknown", "name": None, "found": False, "confidence": 0.0}
 
