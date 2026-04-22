@@ -42,6 +42,7 @@ class ToolSpec:
     output_examples: list[dict[str, Any]] | None = None
     safety_notes: str = ""
     implementation_notes: str = ""
+    backend_method: str = ""
 
 
 @dataclass(slots=True)
@@ -93,6 +94,7 @@ class ToolRegistry:
                 "output_examples": spec.output_examples or [],
                 "safety_notes": spec.safety_notes,
                 "implementation_notes": spec.implementation_notes,
+                "backend_method": spec.backend_method,
             }
             for spec in self.specs.values()
         ]

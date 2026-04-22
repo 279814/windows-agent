@@ -586,6 +586,27 @@ class Desktop:
         except Exception as e:
             return (f"Error switching app: {str(e)}", 1)
 
+    def close_app(self, name: str):
+        try:
+            window, error = self._find_window_by_name(name, refresh_state=True)
+            if window is None:
+                return error, 1
+
+            target_handle = window.handle
+            if not win32gui.IsWindow(target_handle):
+                return f"Invalid window handle for {window.name.title()}", 1
+
+            if win32gui.IsIconic(target_handle):
+                win32gui.ShowWindow(target_handle, win32con.SW_RESTORE)
+
+            result = win32gui.PostMessage(target_handle, win32con.WM_CLOSE, 0, 0)
+            if not result:
+                return f"Failed to post WM_CLOSE to {window.name.title()}.", 1
+
+            return f"Closed {window.name.title()} window.", 0
+        except Exception as e:
+            return (f"Error closing app: {str(e)}", 1)
+
     def bring_window_to_top(self, target_handle: int):
         if not win32gui.IsWindow(target_handle):
             raise ValueError("Invalid window handle")

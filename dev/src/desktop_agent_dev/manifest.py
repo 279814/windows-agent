@@ -51,6 +51,11 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
             "Use snapshot tools to observe state before acting.",
             "Treat window close and app launch as gated operations.",
         ],
+        "high_risk_actions": ["window_close", "launch_app"],
+        "close_semantics": {
+            "preferred_backend": "close_app",
+            "success_rule": "backend exit code is 0 or absent and detail does not start with Failed/Error",
+        },
     }
     chapter = _chapter("Desktop Agent Dev Workspace", summary, body)
     chapter["resource"] = "desktop-agent-dev://readme"
@@ -134,6 +139,11 @@ def build_manifest(registry: ToolRegistry) -> dict[str, Any]:
         "title": "Desktop Agent Dev Workspace",
         "version": "1.4",
         "stage": "phase1",
+        "high_risk_actions": ["window_close", "launch_app"],
+        "close_semantics": {
+            "preferred_backend": "close_app",
+            "success_rule": "backend exit code is 0 or absent and detail does not start with Failed/Error",
+        },
         "resources": [
             {"uri": "desktop-agent-dev://readme", "title": "README"},
             {"uri": "desktop-agent-dev://catalog", "title": "Catalog"},

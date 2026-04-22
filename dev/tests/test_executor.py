@@ -162,3 +162,39 @@ def test_hit_test_prefers_more_specific_overlap_candidate() -> None:
     assert result.payload["element"]["found"] is True
     assert result.payload["element"]["confidence"] > 0.5
     assert result.payload["element"]["z_index"] == 1
+
+
+def test_executor_close_window_uses_backend_close_app() -> None:
+    backend = FakeExecBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.close_window("main")
+
+    assert result.ok is True
+    assert result.detail == "close:main"
+    assert result.tool == "window_close"
+    assert result.payload is not None
+    assert result.payload["close_strategy"] == "backend.close_app"
+    assert result.payload["backend_response"] == "close:main"
+    assert result.payload["exit_code"] == 0
+    assert backend.calls[-1][0] == "close_app"
+    assert backend.calls[-1][1] == ("main",)
+
+
+class FakeFailBackend(FakeExecBackend):
+    def close_app(self, name: str) -> tuple[str, int]:
+        self.calls.append(("close_app", (name,), {}))
+        return (f"Failed to close {name}.", 1)
+
+
+def test_executor_close_window_marks_backend_failure_as_not_ok() -> None:
+    backend = FakeFailBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.close_window("main")
+
+    assert result.ok is False
+    assert result.detail == "Failed to close main."
+    assert result.payload is not None
+    assert result.payload["close_strategy"] == "backend.close_app"
+    assert result.payload["exit_code"] == 1

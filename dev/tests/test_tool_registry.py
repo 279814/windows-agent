@@ -41,6 +41,9 @@ def test_registry_contains_input_and_window_metadata() -> None:
     assert registry.specs["input_shortcut"].param_description
     assert registry.specs["window_resize"].description
     assert registry.specs["window_restore"].kind == "window"
+    assert registry.specs["window_close"].backend_method == "close_app"
+    assert registry.specs["window_close"].safety_notes
+    assert any(tool["name"] == "window_close" and tool["backend_method"] == "close_app" for tool in registry.tool_catalog())
     assert registry.specs["window_launch"].safety_notes
 
 

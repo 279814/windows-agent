@@ -494,6 +494,11 @@ class Executor:
         return self.switch_window(name)
 
     def close_window(self, name: str) -> InputResult:
+        def _normalize_backend_response(response: Any) -> tuple[str, int | None]:
+            if isinstance(response, tuple) and len(response) >= 2:
+                return str(response[0]), response[1] if isinstance(response[1], int) else None
+            return str(response), 0
+
         if self._backend is None:
             return self._result(
                 "window_close",
@@ -509,39 +514,39 @@ class Executor:
 
         if hasattr(self._backend, "close_app"):
             response = self._backend.close_app(name)
+            detail, exit_code = _normalize_backend_response(response)
+            ok = exit_code in (None, 0) and not detail.lower().startswith(("failed", "error"))
             return self._result(
                 "window_close",
-                str(response),
+                detail,
+                ok=ok,
                 payload={
                     "name": name,
                     "target_window": name,
                     "close_strategy": "backend.close_app",
                     "backend_response": response,
+                    "exit_code": exit_code,
                 },
                 tool="window_close",
             )
 
-        if hasattr(self._backend, "focus_app") and hasattr(self._backend, "shortcut"):
-            focus_response = self._backend.focus_app(name)
-            shortcut_response = self._backend.shortcut("alt+f4")
-            payload = {
-                "name": name,
-                "target_window": name,
-                "close_strategy": "focus_app+alt+f4",
-                "focus_response": focus_response,
-                "backend_response": shortcut_response,
-            }
-            return self._result("window_close", str(shortcut_response), payload=payload, tool="window_close")
-
-        if hasattr(self._backend, "shortcut"):
-            shortcut_response = self._backend.shortcut("alt+f4")
-            payload = {
-                "name": name,
-                "target_window": name,
-                "close_strategy": "alt+f4",
-                "backend_response": shortcut_response,
-            }
-            return self._result("window_close", str(shortcut_response), payload=payload, tool="window_close")
+        if hasattr(self._backend, "kill_process"):
+            response = self._backend.kill_process(name=name, force=False)
+            detail, exit_code = _normalize_backend_response(response)
+            ok = exit_code in (None, 0) and not detail.lower().startswith(("failed", "error"))
+            return self._result(
+                "window_close",
+                detail,
+                ok=ok,
+                payload={
+                    "name": name,
+                    "target_window": name,
+                    "close_strategy": "backend.kill_process",
+                    "backend_response": response,
+                    "exit_code": exit_code,
+                },
+                tool="window_close",
+            )
 
         return self._result(
             "window_close",
@@ -552,6 +557,7 @@ class Executor:
                 "target_window": name,
                 "close_strategy": "unavailable",
                 "backend_response": None,
+                "exit_code": None,
             },
             tool="window_close",
         )
