@@ -32,8 +32,6 @@ class _FakeProcess:
 
     def cmdline(self) -> list[str]:
         return [r"D:\Develop-Data\pycharm\PyCharm 2024.1\bin\pycharm64.exe"]
-
-
 def _desktop_with_state(state: _State) -> Desktop:
     desktop = Desktop.__new__(Desktop)
     desktop.desktop_state = None
@@ -69,3 +67,25 @@ def test_find_launch_verification_window_accepts_matching_process_when_window_no
     assert window_name
     assert window_pid == 222
     assert source == "process"
+
+
+def test_launch_name_variants_include_jetbrains_product_family() -> None:
+    desktop = _desktop_with_state(_State(windows=[]))
+
+    variants = desktop._launch_name_variants(r"D:\Develop-Data\pycharm\PyCharm 2024.1\bin\pycharm64.exe")
+    expanded = desktop._expand_launch_aliases(variants)
+
+    assert "pycharm64" in variants
+    assert "pycharm" in variants
+    assert "jetbrains" in expanded
+
+
+def test_extract_pid_candidates_reads_successful_launch_results() -> None:
+    desktop = _desktop_with_state(_State(windows=[]))
+
+    pids = desktop._extract_pid_candidates(
+        "Launched via start menu shortcut: pycharm 2024.1 (score=90). 34032\r\n | unverified:command:foo | 6212"
+    )
+
+    assert 34032 in pids
+    assert 6212 in pids

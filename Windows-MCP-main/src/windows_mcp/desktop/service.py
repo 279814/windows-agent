@@ -95,6 +95,10 @@ class Desktop:
         r"\s+v?\d+(?:\.\d+){1,3}$",
         r"\s+(?:version|ver)\.?\s*\d+(?:\.\d+){0,3}$",
     )
+    _EXECUTABLE_ARCH_SUFFIX_PATTERNS = (
+        r"^(.*?[a-z\u4e00-\u9fff])(?:32|64)$",
+        r"^(.*?[a-z\u4e00-\u9fff])(?:32|64)bit$",
+    )
 
     def __init__(self):
         self.encoding = getpreferredencoding()
@@ -137,6 +141,11 @@ class Desktop:
         _add(text)
         cleaned = self._strip_launch_noise(text)
         _add(cleaned)
+        lowered_cleaned = cleaned.lower()
+        for pattern in self._EXECUTABLE_ARCH_SUFFIX_PATTERNS:
+            match = re.match(pattern, lowered_cleaned)
+            if match:
+                _add(match.group(1))
         for pattern in self._VERSION_TAIL_PATTERNS:
             shortened = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
             if shortened and shortened != cleaned:
@@ -145,12 +154,59 @@ class Desktop:
             path = PureWindowsPath(text)
             for candidate in [path.name, path.stem]:
                 _add(candidate)
+                lowered_candidate = str(candidate).lower()
+                for pattern in self._EXECUTABLE_ARCH_SUFFIX_PATTERNS:
+                    match = re.match(pattern, lowered_candidate)
+                    if match:
+                        _add(match.group(1))
             for part in list(path.parts)[-4:]:
                 if ":" not in part and part not in {"\\", "/"}:
                     _add(part)
         except Exception:
             pass
         return {item for item in variants if item}
+
+    def _expand_launch_aliases(self, values: set[str]) -> set[str]:
+        expanded = set(values)
+        alias_groups = {
+            "calc": {"calc", "calculator", "计算器"},
+            "calculator": {"calc", "calculator", "计算器"},
+            "settings": {"settings", "设置"},
+            "notepad": {"notepad", "记事本"},
+            "explorer": {"explorer", "file explorer", "文件资源管理器"},
+            "file explorer": {"explorer", "file explorer", "文件资源管理器"},
+            "cmd": {"cmd", "command prompt", "命令提示符"},
+            "command prompt": {"cmd", "command prompt", "命令提示符"},
+            "powershell": {"powershell", "pwsh"},
+            "pwsh": {"powershell", "pwsh"},
+            "terminal": {"terminal", "windows terminal", "终端"},
+            "windows terminal": {"terminal", "windows terminal", "终端"},
+            "wechat": {"wechat", "weixin", "微信"},
+            "weixin": {"wechat", "weixin", "微信"},
+            "微信": {"wechat", "weixin", "微信"},
+            "pycharm": {"pycharm", "pycharm64", "jetbrains"},
+            "pycharm64": {"pycharm", "pycharm64", "jetbrains"},
+            "idea": {"idea", "idea64", "intellij", "jetbrains"},
+            "idea64": {"idea", "idea64", "intellij", "jetbrains"},
+            "intellij": {"idea", "idea64", "intellij", "jetbrains"},
+            "webstorm": {"webstorm", "webstorm64", "jetbrains"},
+            "webstorm64": {"webstorm", "webstorm64", "jetbrains"},
+            "goland": {"goland", "goland64", "jetbrains"},
+            "goland64": {"goland", "goland64", "jetbrains"},
+            "clion": {"clion", "clion64", "jetbrains"},
+            "clion64": {"clion", "clion64", "jetbrains"},
+            "datagrip": {"datagrip", "datagrip64", "jetbrains"},
+            "datagrip64": {"datagrip", "datagrip64", "jetbrains"},
+            "rubymine": {"rubymine", "rubymine64", "jetbrains"},
+            "rubymine64": {"rubymine", "rubymine64", "jetbrains"},
+            "phpstorm": {"phpstorm", "phpstorm64", "jetbrains"},
+            "phpstorm64": {"phpstorm", "phpstorm64", "jetbrains"},
+            "jetbrains": {"jetbrains"},
+        }
+        for value in list(expanded):
+            for alias in alias_groups.get(value, set()):
+                expanded.update(self._launch_name_variants(alias))
+        return {item for item in expanded if item}
 
     def _contains_phrase_tokens(self, words: list[str], phrase_words: list[str]) -> bool:
         if not words or not phrase_words or len(phrase_words) > len(words):
@@ -186,6 +242,16 @@ class Desktop:
         except Exception:
             return set(), None
         return signatures, label
+
+    def _extract_pid_candidates(self, value: str | None) -> set[int]:
+        text = str(value or "")
+        candidates: set[int] = set()
+        for match in re.findall(r"(?<!\d)(\d{3,6})(?!\d)", text):
+            try:
+                candidates.add(int(match))
+            except Exception:
+                continue
+        return candidates
 
     def _control_text_snapshot(self, control: Any | None, window_name: str | None = None) -> dict[str, Any] | None:
         if control is None:
@@ -913,30 +979,9 @@ class Desktop:
         attempts: int = 1,
         delay_seconds: float = 0.4,
     ) -> tuple[str | None, int | None, str]:
-        expected_targets = self._launch_name_variants(name)
+        expected_targets = self._expand_launch_aliases(self._launch_name_variants(name))
         if not expected_targets:
             return None, None, "no_expected_target"
-
-        alias_map = {
-            "calc": {"calc", "calculator", "计算器"},
-            "calculator": {"calc", "calculator", "计算器"},
-            "settings": {"settings", "设置"},
-            "notepad": {"notepad", "记事本"},
-            "explorer": {"explorer", "file explorer", "文件资源管理器"},
-            "file explorer": {"explorer", "file explorer", "文件资源管理器"},
-            "cmd": {"cmd", "command prompt", "命令提示符"},
-            "command prompt": {"cmd", "command prompt", "命令提示符"},
-            "powershell": {"powershell", "pwsh"},
-            "pwsh": {"powershell", "pwsh"},
-            "terminal": {"terminal", "windows terminal", "终端"},
-            "windows terminal": {"terminal", "windows terminal", "终端"},
-            "wechat": {"wechat", "weixin", "微信"},
-            "weixin": {"wechat", "weixin", "微信"},
-            "微信": {"wechat", "weixin", "微信"},
-        }
-        for target in list(expected_targets):
-            for alias in alias_map.get(target, set()):
-                expected_targets.update(self._launch_name_variants(alias))
 
         pid_candidates: set[int] = set()
         for candidate_pid in ([pid] if pid else []) + list(known_pids or []):
@@ -981,6 +1026,7 @@ class Desktop:
 
             for candidate_pid in pid_candidates:
                 process_targets, process_label = self._process_verification_signature(candidate_pid)
+                process_targets = self._expand_launch_aliases(process_targets)
                 if process_targets.intersection(expected_targets):
                     return process_label or str(candidate_pid), candidate_pid, "process"
 
@@ -1003,8 +1049,10 @@ class Desktop:
             baseline_handles = set()
 
         def _verify_and_return(response: str, pid: int, attempt_label: str) -> tuple[str, int, int] | None:
-            if pid > 0 and pid not in observed_pids:
-                observed_pids.append(pid)
+            extracted_pids = self._extract_pid_candidates(response)
+            for observed_pid in list(extracted_pids) + ([pid] if pid > 0 else []):
+                if observed_pid > 0 and observed_pid not in observed_pids:
+                    observed_pids.append(observed_pid)
             launch_verification_name, launch_verification_pid, verification_source = self._find_launch_verification_window(
                 name,
                 pid=pid,
