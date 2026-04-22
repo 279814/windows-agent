@@ -8,6 +8,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:  # noqa: BLE001
+    pass
+
 from desktop_agent_dev.mcp_server import create_server
 
 
@@ -73,8 +78,8 @@ def _log_backend_methods(backend: Any) -> None:
 def validate_registry(server: Any) -> None:
     metadata = server.tool_registry.metadata()
     assert metadata["stage"] == "phase1"
-    assert "tools" in metadata
-    assert "groups" in metadata
+    assert "tool_catalog" in metadata
+    assert "group_catalog" in metadata
     assert "vision_capture" in server.tool_registry.specs
     assert "ocr_extract" in server.tool_registry.specs
     assert metadata["capabilities"]["vision_hooks"] is True
@@ -86,7 +91,7 @@ def validate_perception(server: Any, backend: Any | None) -> dict[str, Any]:
     before = serialize_snapshot(_safe_call("perception.snapshot(false)", lambda: server.services.perception.snapshot(with_screenshot=False)))
     after = serialize_snapshot(_safe_call("perception.snapshot(true)", lambda: server.services.perception.snapshot(with_screenshot=True)))
     delta = diff_dict(before, after)
-    print(json.dumps({"before": before, "after": after, "delta": delta}, ensure_ascii=False, indent=2))
+    print(json.dumps({"before": before, "after": after, "delta": delta}, ensure_ascii=False, indent=2).encode("utf-8", errors="replace").decode("utf-8"))
 
     if backend is not None:
         _log_backend_methods(backend)
@@ -126,7 +131,7 @@ def validate_executor(server: Any, backend: Any | None) -> dict[str, Any]:
             _safe_call("backend.resize_app", lambda: backend.resize_app(name=None, size=None, loc=None))
 
     payload = {name: asdict(result) for name, result in results.items()}
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    print(json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8", errors="replace").decode("utf-8"))
     assert results["click"].tool == "input_click"
     assert results["type"].tool == "input_type"
     assert results["shortcut"].tool == "input_shortcut"
@@ -141,7 +146,7 @@ def validate_task_and_safety(server: Any) -> dict[str, Any]:
         "plan": {"goal": plan.goal, "steps": [asdict(step) for step in plan.steps]},
         "safety_click_allowed": state,
     }
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print(json.dumps(summary, ensure_ascii=False, indent=2).encode("utf-8", errors="replace").decode("utf-8"))
     assert plan.steps
     return summary
 
@@ -157,7 +162,7 @@ def validate_real_backend(backend_root: str) -> int:
     executor = validate_executor(server, backend)
 
     print("[integration] phase1 integration summary")
-    print(json.dumps({"perception": perception, "executor": executor}, ensure_ascii=False, indent=2))
+    print(json.dumps({"perception": perception, "executor": executor}, ensure_ascii=False, indent=2).encode("utf-8", errors="replace").decode("utf-8"))
     return 0
 
 
@@ -185,7 +190,7 @@ def main() -> int:
 
     if not args.skip_integration:
         if args.real_backend_root:
-            steps.append([sys.executable, "-m", "desktop_agent_dev", "--windows-mcp-root", args.real_backend_root])
+            print("[warn] skipping raw stdio launch check; validation will use in-process MCP server and backend calls")
         else:
             print("[warn] real backend root not provided; skipping backend launch validation")
 

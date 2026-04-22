@@ -17,7 +17,7 @@ def main() -> int:
     parser.add_argument("--windows-mcp-root", default=None)
     args = parser.parse_args()
     server = create_server(args.windows_mcp_root)
-    server.run()
+    server.mcp.run()
     return 0
 
 

@@ -2,35 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
 
-try:
-    from fastmcp import FastMCP
-except ModuleNotFoundError:  # pragma: no cover - optional dependency in dev/test environments
-    class FastMCP:  # type: ignore[override]
-        def __init__(self, name: str, instructions: str | None = None, lifespan: Any | None = None) -> None:
-            self.name = name
-            self.instructions = instructions
-            self.lifespan = lifespan
-            self._tools: list[Callable[..., Any]] = []
-            self._resources: list[dict[str, Any]] = []
-
-        def tool(self, name: str | None = None, description: str | None = None):
-            def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-                self._tools.append(fn)
-                return fn
-
-            return decorator
-
-        def resource(self, name: str | None = None, uri: str | None = None, description: str | None = None):
-            def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-                self._resources.append({"name": name, "uri": uri, "description": description, "fn": fn})
-                return fn
-
-            return decorator
-
-        def run(self) -> None:
-            return None
+from mcp.server.fastmcp import FastMCP
 
 from .backend_windows_mcp import build_backend_bundle
 from .executor import Executor
