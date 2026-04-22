@@ -931,6 +931,7 @@ class Executor:
                 detail = f"{target_name} is {reason}"
             if not ok_flag and after is None:
                 detail = f"Resize verification failed for {target_name}."
+            attempted_restore = bool(before_status in {"minimized", "maximized"})
             payload = {
                 **self._window_payload(target_window=target_name, before=before, after=after),
                 "verified": verified,
