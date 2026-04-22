@@ -800,17 +800,23 @@ class Executor:
             "status": None,
             "handle": None,
         }
+        before_payload = {
+            "before_target_window": before.get("name") if before else name,
+            "before_window": before,
+            "before_status": before.get("status") if before else None,
+            "before_handle": before.get("handle") if before else None,
+        }
         if self._backend is None:
             return self._result(
                 "window_minimize",
                 f"minimize:{name or 'active'}",
                 payload={
+                    **before_payload,
                     "target_window": before.get("name") if before else name,
-                    "before_status": before.get("status") if before else None,
                     "after_status": None,
                     "verified": False,
-                    "before_window": before,
                     "after_window": None,
+                    "after_handle": None,
                 },
                 tool="window_minimize",
             )
@@ -819,11 +825,11 @@ class Executor:
             after = _current_window_snapshot()
             verified = bool(after and str(after.get("status", "")).lower().endswith("minimized"))
             payload = {
+                **before_payload,
                 "target_window": before.get("name") if before else name,
-                "before_status": before.get("status") if before else None,
                 "after_status": after.get("status") if after else None,
+                "after_handle": after.get("handle") if after else None,
                 "verified": verified,
-                "before_window": before,
                 "after_window": after,
             }
             return self._result("window_minimize", str(response), payload=payload, tool="window_minimize")
