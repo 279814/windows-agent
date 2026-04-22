@@ -760,42 +760,64 @@ class Executor:
             if backend is None:
                 return None
             try:
-                state = getattr(backend, "desktop_state", None)
+                getter = getattr(backend, "get_state", None)
+                state = None
+                if callable(getter):
+                    try:
+                        state = getter(use_vision=False, as_bytes=False)
+                    except TypeError:
+                        state = getter()
+                if state is None:
+                    state = getattr(backend, "desktop_state", None)
+
+                def _window_to_snapshot(window: Any) -> dict[str, Any] | None:
+                    if window is None:
+                        return None
+                    return {
+                        "name": getattr(window, "name", None),
+                        "status": getattr(getattr(window, "status", None), "name", None) or getattr(window, "status", None),
+                        "handle": getattr(window, "handle", None),
+                    }
+
                 if state is not None:
                     window = getattr(state, "active_window", None) if name is None else None
                     if window is None and name is not None:
                         windows = list(getattr(state, "windows", []) or [])
                         for candidate in windows:
-                            if getattr(candidate, "name", None) == name:
+                            candidate_name = getattr(candidate, "name", None)
+                            if candidate_name == name or (candidate_name and name and candidate_name.lower() == name.lower()):
                                 window = candidate
                                 break
-                    if window is not None:
-                        return {
-                            "name": getattr(window, "name", None),
-                            "status": getattr(getattr(window, "status", None), "name", None) or getattr(window, "status", None),
-                            "handle": getattr(window, "handle", None),
-                        }
-                getter = getattr(backend, "get_state", None)
-                if callable(getter):
-                    state = getter(use_vision=False, as_bytes=False)
-                    window = getattr(state, "active_window", None) if name is None else None
-                    if window is None and name is not None:
-                        windows = list(getattr(state, "windows", []) or [])
-                        for candidate in windows:
-                            if getattr(candidate, "name", None) == name:
-                                window = candidate
-                                break
-                    if window is not None:
-                        return {
-                            "name": getattr(window, "name", None),
-                            "status": getattr(getattr(window, "status", None), "name", None) or getattr(window, "status", None),
-                            "handle": getattr(window, "handle", None),
-                        }
+                    snapshot = _window_to_snapshot(window)
+                    if snapshot is not None:
+                        return snapshot
+
+                find_window = getattr(backend, "_find_window_by_name", None)
+                if callable(find_window) and name is not None:
+                    try:
+                        target_window, _ = find_window(name, refresh_state=True)
+                    except Exception:
+                        target_window = None
+                    snapshot = _window_to_snapshot(target_window)
+                    if snapshot is not None:
+                        return snapshot
             except Exception:
                 return None
             return None
 
-        before = _current_window_snapshot() or {
+        before = _current_window_snapshot()
+        if before is None and self._backend is not None and name is not None and hasattr(self._backend, "_find_window_by_name"):
+            try:
+                target_window, _ = self._backend._find_window_by_name(name, refresh_state=True)
+                if target_window is not None:
+                    before = {
+                        "name": getattr(target_window, "name", None),
+                        "status": getattr(getattr(target_window, "status", None), "name", None) or getattr(target_window, "status", None),
+                        "handle": getattr(target_window, "handle", None),
+                    }
+            except Exception:
+                before = None
+        before = before or {
             "name": name,
             "status": None,
             "handle": None,
@@ -823,6 +845,17 @@ class Executor:
         if hasattr(self._backend, "minimize_app"):
             response = self._backend.minimize_app(name=name)
             after = _current_window_snapshot()
+            if after is None and name is not None and hasattr(self._backend, "_find_window_by_name"):
+                try:
+                    target_window, _ = self._backend._find_window_by_name(name, refresh_state=True)
+                    if target_window is not None:
+                        after = {
+                            "name": getattr(target_window, "name", None),
+                            "status": getattr(getattr(target_window, "status", None), "name", None) or getattr(target_window, "status", None),
+                            "handle": getattr(target_window, "handle", None),
+                        }
+                except Exception:
+                    after = None
             verified = bool(after and str(after.get("status", "")).lower().endswith("minimized"))
             payload = {
                 **before_payload,
