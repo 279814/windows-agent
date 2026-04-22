@@ -405,8 +405,51 @@ class Executor:
             return self._result("window_launch", f"launch:{name}", tool="window_launch")
 
         if hasattr(self._backend, "launch_app"):
+            before_state = None
+            after_state = None
+            try:
+                state = self._backend.get_state(use_vision=False, as_bytes=False)
+                before_state = getattr(state, "windows", None)
+            except Exception:
+                before_state = None
+
             response = self._backend.launch_app(name)
-            return self._result("window_launch", str(response), tool="window_launch")
+            response_text = response[0] if isinstance(response, tuple) and response else response
+            status = response[1] if isinstance(response, tuple) and len(response) > 1 and isinstance(response[1], int) else None
+            pid = response[2] if isinstance(response, tuple) and len(response) > 2 and isinstance(response[2], int) else None
+            launched = status == 0
+            detected = False
+            try:
+                state_after = self._backend.get_state(use_vision=False, as_bytes=False)
+                after_state = getattr(state_after, "windows", None)
+                before_count = len(before_state) if isinstance(before_state, list) else None
+                after_count = len(after_state) if isinstance(after_state, list) else None
+                if before_count is not None and after_count is not None and after_count > before_count:
+                    detected = True
+                active_after = getattr(state_after, "active_window", None)
+                if isinstance(active_after, dict):
+                    current_name = active_after.get("name") or active_after.get("window_title")
+                    detected = detected or (current_name is not None and name.lower() in str(current_name).lower())
+                elif active_after is not None:
+                    current_name = getattr(active_after, "name", None) or getattr(active_after, "window_title", None)
+                    detected = detected or (current_name is not None and name.lower() in str(current_name).lower())
+            except Exception:
+                after_state = None
+
+            ok_flag = bool(launched and (detected or pid is not None or response_text))
+            detail = str(response_text)
+            if not ok_flag and status not in (None, 0):
+                detail = str(response_text)
+            payload = {
+                "name": name,
+                "backend_response": response,
+                "status": status,
+                "pid": pid,
+                "before_window_count": len(before_state) if isinstance(before_state, list) else None,
+                "after_window_count": len(after_state) if isinstance(after_state, list) else None,
+                "window_detected": detected,
+            }
+            return InputResult(ok=ok_flag, detail=detail, payload=payload, tool="window_launch")
 
         raise ExecutorError("Backend does not expose launch_app().")
 
