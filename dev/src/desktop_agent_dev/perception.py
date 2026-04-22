@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
+from time import time_ns
 from typing import Any
 
 
@@ -56,7 +58,10 @@ class Perception:
 
         if hasattr(self._backend, "get_state"):
             state = self._backend.get_state(use_vision=with_screenshot, as_bytes=with_screenshot)
-            return self._from_backend_state(state)
+            snapshot = self._from_backend_state(state)
+            if with_screenshot and snapshot.screenshot is not None:
+                snapshot = self._persist_screenshot(snapshot)
+            return snapshot
 
         raise PerceptionError("Backend does not expose get_state().")
 
@@ -150,6 +155,45 @@ class Perception:
         }
 
     @staticmethod
+    def _persist_screenshot(snapshot: DesktopSnapshot) -> DesktopSnapshot:
+        screenshot = snapshot.screenshot
+        if screenshot is None:
+            return snapshot
+
+        tmp_dir = Path(__file__).resolve().parents[2] / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        screenshot_path = tmp_dir / f"desktop_snapshot_{time_ns()}.png"
+        if isinstance(screenshot, bytes):
+            screenshot_path.write_bytes(screenshot)
+        else:
+            try:
+                from io import BytesIO
+
+                buffer = BytesIO()
+                screenshot.save(buffer, format="PNG")
+                screenshot_path.write_bytes(buffer.getvalue())
+            except Exception:
+                return snapshot
+
+        metadata = dict(snapshot.metadata)
+        metadata["source"] = "windows-mcp"
+        metadata["screenshot_path"] = str(screenshot_path)
+        metadata["screenshot_id"] = str(screenshot_path)
+        metadata["screenshot_handle"] = str(screenshot_path)
+        metadata["has_screenshot"] = True
+        metadata["screenshot_bytes"] = len(snapshot.screenshot)
+        return DesktopSnapshot(
+            active_window=snapshot.active_window,
+            windows=snapshot.windows,
+            screenshot=snapshot.screenshot,
+            screenshot_path=str(screenshot_path),
+            cursor=snapshot.cursor,
+            tree_nodes=snapshot.tree_nodes,
+            focused_control=snapshot.focused_control,
+            metadata=metadata,
+        )
+
+    @staticmethod
     def _from_backend_state(state: Any) -> DesktopSnapshot:
         windows = []
         seen: set[tuple[int | None, str]] = set()
@@ -180,6 +224,8 @@ class Perception:
         metadata = {"source": "windows-mcp"}
         if screenshot_path is not None:
             metadata["screenshot_path"] = screenshot_path
+            metadata["screenshot_id"] = screenshot_path
+            metadata["screenshot_handle"] = screenshot_path
         if screenshot is not None:
             metadata["has_screenshot"] = True
             metadata["screenshot_bytes"] = len(screenshot)
