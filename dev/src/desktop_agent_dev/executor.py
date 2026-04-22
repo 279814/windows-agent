@@ -495,13 +495,66 @@ class Executor:
 
     def close_window(self, name: str) -> InputResult:
         if self._backend is None:
-            return self._result("window_close", f"close:{name}", tool="window_close")
+            return self._result(
+                "window_close",
+                f"close:{name}",
+                payload={
+                    "name": name,
+                    "target_window": name,
+                    "close_strategy": "synthetic",
+                    "backend_response": "synthetic-close",
+                },
+                tool="window_close",
+            )
 
         if hasattr(self._backend, "close_app"):
             response = self._backend.close_app(name)
-            return self._result("window_close", str(response), tool="window_close")
+            return self._result(
+                "window_close",
+                str(response),
+                payload={
+                    "name": name,
+                    "target_window": name,
+                    "close_strategy": "backend.close_app",
+                    "backend_response": response,
+                },
+                tool="window_close",
+            )
 
-        raise ExecutorError("Backend does not expose close_app().")
+        if hasattr(self._backend, "focus_app") and hasattr(self._backend, "shortcut"):
+            focus_response = self._backend.focus_app(name)
+            shortcut_response = self._backend.shortcut("alt+f4")
+            payload = {
+                "name": name,
+                "target_window": name,
+                "close_strategy": "focus_app+alt+f4",
+                "focus_response": focus_response,
+                "backend_response": shortcut_response,
+            }
+            return self._result("window_close", str(shortcut_response), payload=payload, tool="window_close")
+
+        if hasattr(self._backend, "shortcut"):
+            shortcut_response = self._backend.shortcut("alt+f4")
+            payload = {
+                "name": name,
+                "target_window": name,
+                "close_strategy": "alt+f4",
+                "backend_response": shortcut_response,
+            }
+            return self._result("window_close", str(shortcut_response), payload=payload, tool="window_close")
+
+        return self._result(
+            "window_close",
+            f"close:{name}",
+            ok=False,
+            payload={
+                "name": name,
+                "target_window": name,
+                "close_strategy": "unavailable",
+                "backend_response": None,
+            },
+            tool="window_close",
+        )
 
     def resize_window(
         self,
