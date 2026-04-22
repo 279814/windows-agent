@@ -483,29 +483,83 @@ class Desktop:
             window_control.MoveWindow(x, y, width, height)
             return (f"{target_window.name} resized to {width}x{height} at {x},{y}.", 0)
 
+    def minimize_app(self, name: str | None = None) -> tuple[str, int]:
+        if name is not None:
+            target_window, error = self._find_window_by_name(name, refresh_state=True)
+            if target_window is None:
+                return error, 1
+        else:
+            target_window = self.desktop_state.active_window if self.desktop_state else None
+            if target_window is None:
+                return "No active window found", 1
+
+        if target_window.status == Status.MINIMIZED:
+            return f"{target_window.name} is already minimized.", 0
+
+        try:
+            window_control = uia.ControlFromHandle(target_window.handle)
+            uia.ShowWindow(window_control.NativeWindowHandle, win32con.SW_MINIMIZE)
+            return f"{target_window.name} minimized.", 0
+        except Exception as ex:
+            return f"Failed to minimize {target_window.name}: {ex}", 1
+
     def is_app_running(self, name: str) -> bool:
         windows, _ = self.get_windows()
         windows_dict = {window.name: window for window in windows}
         return process.extractOne(name, list(windows_dict.keys()), score_cutoff=60) is not None
 
+    def _wrap_app_result(
+        self,
+        *,
+        mode: str,
+        name: str | None,
+        response: str,
+        status: int,
+        pid: int = 0,
+        verified: bool = False,
+        verification_source: str | None = None,
+    ) -> dict[str, Any]:
+        ok = status == 0
+        outcome = "success" if ok else "failed"
+        data: dict[str, Any] = {
+            "mode": mode,
+            "name": name,
+            "response": response,
+            "status": status,
+            "pid": pid,
+            "verified": verified,
+            "verification_source": verification_source,
+            "outcome": outcome,
+        }
+        error = None if ok else {"code": "operation_failed", "message": response}
+        return {
+            "ok": ok,
+            "tool": "App",
+            "message": response if ok else f"{mode} failed",
+            "data": data,
+            "error": error,
+        }
+
     def app(
         self,
-        mode: Literal["launch", "switch", "resize"],
+        mode: Literal["launch", "switch", "resize", "minimize"],
         name: str | None = None,
         loc: tuple[int, int] | None = None,
         size: tuple[int, int] | None = None,
-    ):
+    ) -> dict[str, Any]:
         match mode:
             case "launch":
                 response, status, pid = self.launch_app(name)
                 if status != 0:
-                    return response
+                    return self._wrap_app_result(mode=mode, name=name, response=response, status=status, pid=pid)
 
                 # Smart wait using UIA Exists (avoids manual Python loops)
                 launched = False
+                verification_source = None
                 if pid > 0:
                     if uia.WindowControl(ProcessId=pid).Exists(maxSearchSeconds=10):
                         launched = True
+                        verification_source = "pid"
 
                 if not launched:
                     # Fallback: Regex search for the window title
@@ -514,22 +568,34 @@ class Desktop:
                         maxSearchSeconds=10
                     ):
                         launched = True
+                        verification_source = "regex"
 
                 if launched:
-                    return f"{name.title()} launched."
-                return f"Launching {name.title()} sent, but window not detected yet."
+                    return self._wrap_app_result(
+                        mode=mode,
+                        name=name,
+                        response=f"{name.title()} launched.",
+                        status=0,
+                        pid=pid,
+                        verified=True,
+                        verification_source=verification_source,
+                    )
+                return self._wrap_app_result(
+                    mode=mode,
+                    name=name,
+                    response=f"Launching {name.title()} sent, but window not detected yet.",
+                    status=1,
+                    pid=pid,
+                )
             case "resize":
                 response, status = self.resize_app(name=name, size=size, loc=loc)
-                if status != 0:
-                    return response
-                else:
-                    return response
+                return self._wrap_app_result(mode=mode, name=name, response=response, status=status)
             case "switch":
                 response, status = self.switch_app(name)
-                if status != 0:
-                    return response
-                else:
-                    return response
+                return self._wrap_app_result(mode=mode, name=name, response=response, status=status)
+            case "minimize":
+                response, status = self.minimize_app(name=name)
+                return self._wrap_app_result(mode=mode, name=name, response=response, status=status)
 
     def _check_app_exists(self, app_id: str) -> bool:
         """Check if an app with the given AppID exists in shell:AppsFolder."""
