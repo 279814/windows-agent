@@ -454,76 +454,45 @@ class Executor:
         raise ExecutorError("Backend does not expose launch_app().")
 
     def switch_window(self, name: str) -> InputResult:
+        previous = self._snapshot_window(refresh=True)
         if self._backend is None:
             return self._result(
                 "window_switch",
                 f"switch:{name}",
                 payload={
-                    "name": name,
-                    "target_window": name,
-                    "previous_window": None,
-                    "previous_handle": None,
+                    **self._window_payload(target_window=name, before=previous, after={"name": name, "status": None, "handle": None}),
+                    "previous_window": previous.get("name") if previous else None,
+                    "previous_handle": previous.get("handle") if previous else None,
                     "current_window": name,
                     "current_handle": None,
                     "matched_by": "name",
+                    "restored_from_minimized": False,
+                    "verified": False,
                 },
                 tool="window_switch",
             )
 
         if hasattr(self._backend, "switch_app"):
-            previous_window = None
-            previous_handle = None
-            restored_from_minimized = None
-            try:
-                state = self._backend.get_state(use_vision=False, as_bytes=False)
-                active = getattr(state, "active_window", None)
-                if isinstance(active, dict):
-                    previous_window = active.get("name") or active.get("window_title")
-                    previous_handle = active.get("handle")
-                    status = str(active.get("status") or "").lower()
-                    restored_from_minimized = status == "minimized"
-                elif active is not None:
-                    previous_window = getattr(active, "name", None) or getattr(active, "window_title", None)
-                    previous_handle = getattr(active, "handle", None)
-                    status = str(getattr(active, "status", "") or "").lower()
-                    restored_from_minimized = status == "minimized"
-            except Exception:
-                previous_window = None
-                previous_handle = None
-                restored_from_minimized = None
-
             response = self._backend.switch_app(name)
-            current_window = None
-            current_handle = None
-            matched_by = "name"
-            try:
-                state_after = self._backend.get_state(use_vision=False, as_bytes=False)
-                active_after = getattr(state_after, "active_window", None)
-                if isinstance(active_after, dict):
-                    current_window = active_after.get("name") or active_after.get("window_title")
-                    current_handle = active_after.get("handle")
-                    matched_by = active_after.get("matched_by") or matched_by
-                elif active_after is not None:
-                    current_window = getattr(active_after, "name", None) or getattr(active_after, "window_title", None)
-                    current_handle = getattr(active_after, "handle", None)
-                    matched_by = getattr(active_after, "matched_by", None) or matched_by
-            except Exception:
-                current_window = None
-                current_handle = None
-
+            current = self._snapshot_window(name, refresh=True)
+            if current is None:
+                current = self._snapshot_window(refresh=True)
+            verified = bool(current and current.get("name") and str(current.get("name")).lower() == str(name).lower())
+            restored_from_minimized = bool(previous and str(previous.get("status", "")).lower() == "minimized")
             payload = {
+                **self._window_payload(target_window=name, before=previous, after=current),
                 "name": name,
-                "target_window": name,
-                "previous_window": previous_window,
-                "previous_handle": previous_handle,
-                "current_window": current_window,
-                "current_handle": current_handle,
-                "matched_by": matched_by,
+                "previous_window": previous.get("name") if previous else None,
+                "previous_handle": previous.get("handle") if previous else None,
+                "current_window": current.get("name") if current else None,
+                "current_handle": current.get("handle") if current else None,
+                "matched_by": "name",
                 "restored_from_minimized": restored_from_minimized,
                 "backend_response": response,
+                "verified": verified,
             }
             detail = str(response[0]) if isinstance(response, tuple) and response else str(response)
-            return self._result("window_switch", detail, payload={**payload, "backend_response": response}, tool="window_switch")
+            return self._result("window_switch", detail, payload=payload, tool="window_switch")
 
         raise ExecutorError("Backend does not expose switch_app().")
 
@@ -725,6 +694,74 @@ class Executor:
             tool="window_close",
         )
 
+    def _snapshot_window(self, name: str | None = None, refresh: bool = False) -> dict[str, Any] | None:
+        backend = self._backend
+        if backend is None:
+            return None
+
+        def _window_to_snapshot(window: Any) -> dict[str, Any] | None:
+            if window is None:
+                return None
+            return {
+                "name": getattr(window, "name", None) or getattr(window, "window_title", None),
+                "status": getattr(getattr(window, "status", None), "name", None) or getattr(window, "status", None),
+                "handle": getattr(window, "handle", None),
+                "window_title": getattr(window, "window_title", None) or getattr(window, "name", None),
+            }
+
+        try:
+            getter = getattr(backend, "get_state", None)
+            state = None
+            if callable(getter):
+                try:
+                    state = getter(use_vision=False, as_bytes=False)
+                except TypeError:
+                    state = getter()
+            if state is None:
+                state = getattr(backend, "desktop_state", None)
+
+            if state is not None:
+                window = getattr(state, "active_window", None) if name is None else None
+                if window is None and name is not None:
+                    windows = list(getattr(state, "windows", []) or [])
+                    for candidate in windows:
+                        candidate_name = getattr(candidate, "name", None) or getattr(candidate, "window_title", None)
+                        if candidate_name == name or (candidate_name and name and str(candidate_name).lower() == str(name).lower()):
+                            window = candidate
+                            break
+                snapshot = _window_to_snapshot(window)
+                if snapshot is not None:
+                    return snapshot
+
+            if refresh and name is not None:
+                find_window = getattr(backend, "_find_window_by_name", None)
+                if callable(find_window):
+                    try:
+                        target_window, _ = find_window(name, refresh_state=True)
+                    except Exception:
+                        target_window = None
+                    snapshot = _window_to_snapshot(target_window)
+                    if snapshot is not None:
+                        return snapshot
+        except Exception:
+            return None
+        return None
+
+    def _window_payload(self, *, target_window: str | None, before: dict[str, Any] | None, after: dict[str, Any] | None = None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "before_target_window": before.get("name") if before else target_window,
+            "before_window": before,
+            "before_status": before.get("status") if before else None,
+            "before_handle": before.get("handle") if before else None,
+            "target_window": target_window,
+            "after_window": after,
+            "after_status": after.get("status") if after else None,
+            "after_handle": after.get("handle") if after else None,
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
     def resize_window(
         self,
         name: str | None = None,
@@ -733,11 +770,12 @@ class Executor:
         x: int | None = None,
         y: int | None = None,
     ) -> InputResult:
+        before = self._snapshot_window(name, refresh=True) or {"name": name, "status": None, "handle": None}
         if self._backend is None:
             return self._result(
                 "window_resize",
                 f"resize:{name or 'active'}:{width}x{height}@{x},{y}",
-                payload={"name": name, "width": width, "height": height, "x": x, "y": y},
+                payload={**self._window_payload(target_window=before.get("name") if before else name, before=before), "verified": False},
                 tool="window_resize",
             )
 
@@ -745,126 +783,26 @@ class Executor:
             loc = (x, y) if x is not None and y is not None else None
             size = (width, height) if width is not None and height is not None else None
             response = self._backend.resize_app(name=name, size=size, loc=loc)
-            return self._result(
-                "window_resize",
-                str(response),
-                payload={"name": name, "width": width, "height": height, "x": x, "y": y},
-                tool="window_resize",
-            )
+            after = self._snapshot_window(name, refresh=True)
+            payload = {**self._window_payload(target_window=before.get("name") if before else name, before=before, after=after), "verified": after is not None}
+            return self._result("window_resize", str(response), payload=payload, tool="window_resize")
 
         raise ExecutorError("Backend does not expose resize_app().")
 
     def minimize_window(self, name: str | None = None) -> InputResult:
-        def _current_window_snapshot() -> dict[str, Any] | None:
-            backend = self._backend
-            if backend is None:
-                return None
-            try:
-                getter = getattr(backend, "get_state", None)
-                state = None
-                if callable(getter):
-                    try:
-                        state = getter(use_vision=False, as_bytes=False)
-                    except TypeError:
-                        state = getter()
-                if state is None:
-                    state = getattr(backend, "desktop_state", None)
-
-                def _window_to_snapshot(window: Any) -> dict[str, Any] | None:
-                    if window is None:
-                        return None
-                    return {
-                        "name": getattr(window, "name", None),
-                        "status": getattr(getattr(window, "status", None), "name", None) or getattr(window, "status", None),
-                        "handle": getattr(window, "handle", None),
-                    }
-
-                if state is not None:
-                    window = getattr(state, "active_window", None) if name is None else None
-                    if window is None and name is not None:
-                        windows = list(getattr(state, "windows", []) or [])
-                        for candidate in windows:
-                            candidate_name = getattr(candidate, "name", None)
-                            if candidate_name == name or (candidate_name and name and candidate_name.lower() == name.lower()):
-                                window = candidate
-                                break
-                    snapshot = _window_to_snapshot(window)
-                    if snapshot is not None:
-                        return snapshot
-
-                find_window = getattr(backend, "_find_window_by_name", None)
-                if callable(find_window) and name is not None:
-                    try:
-                        target_window, _ = find_window(name, refresh_state=True)
-                    except Exception:
-                        target_window = None
-                    snapshot = _window_to_snapshot(target_window)
-                    if snapshot is not None:
-                        return snapshot
-            except Exception:
-                return None
-            return None
-
-        before = _current_window_snapshot()
-        if before is None and self._backend is not None and name is not None and hasattr(self._backend, "_find_window_by_name"):
-            try:
-                target_window, _ = self._backend._find_window_by_name(name, refresh_state=True)
-                if target_window is not None:
-                    before = {
-                        "name": getattr(target_window, "name", None),
-                        "status": getattr(getattr(target_window, "status", None), "name", None) or getattr(target_window, "status", None),
-                        "handle": getattr(target_window, "handle", None),
-                    }
-            except Exception:
-                before = None
-        before = before or {
-            "name": name,
-            "status": None,
-            "handle": None,
-        }
-        before_payload = {
-            "before_target_window": before.get("name") if before else name,
-            "before_window": before,
-            "before_status": before.get("status") if before else None,
-            "before_handle": before.get("handle") if before else None,
-        }
+        before = self._snapshot_window(name, refresh=True) or {"name": name, "status": None, "handle": None}
         if self._backend is None:
             return self._result(
                 "window_minimize",
                 f"minimize:{name or 'active'}",
-                payload={
-                    **before_payload,
-                    "target_window": before.get("name") if before else name,
-                    "after_status": None,
-                    "verified": False,
-                    "after_window": None,
-                    "after_handle": None,
-                },
+                payload={**self._window_payload(target_window=before.get("name") if before else name, before=before), "verified": False},
                 tool="window_minimize",
             )
         if hasattr(self._backend, "minimize_app"):
             response = self._backend.minimize_app(name=name)
-            after = _current_window_snapshot()
-            if after is None and name is not None and hasattr(self._backend, "_find_window_by_name"):
-                try:
-                    target_window, _ = self._backend._find_window_by_name(name, refresh_state=True)
-                    if target_window is not None:
-                        after = {
-                            "name": getattr(target_window, "name", None),
-                            "status": getattr(getattr(target_window, "status", None), "name", None) or getattr(target_window, "status", None),
-                            "handle": getattr(target_window, "handle", None),
-                        }
-                except Exception:
-                    after = None
+            after = self._snapshot_window(name, refresh=True)
             verified = bool(after and str(after.get("status", "")).lower().endswith("minimized"))
-            payload = {
-                **before_payload,
-                "target_window": before.get("name") if before else name,
-                "after_status": after.get("status") if after else None,
-                "after_handle": after.get("handle") if after else None,
-                "verified": verified,
-                "after_window": after,
-            }
+            payload = {**self._window_payload(target_window=before.get("name") if before else name, before=before, after=after), "verified": verified}
             return self._result("window_minimize", str(response), payload=payload, tool="window_minimize")
         raise ExecutorError("Backend does not expose minimize_app().")
 
@@ -877,9 +815,18 @@ class Executor:
         raise ExecutorError("Backend does not expose maximize_app().")
 
     def restore_window(self, name: str | None = None) -> InputResult:
+        before = self._snapshot_window(name, refresh=True) or {"name": name, "status": None, "handle": None}
         if self._backend is None:
-            return self._result("window_restore", f"restore:{name or 'active'}", tool="window_restore")
+            return self._result(
+                "window_restore",
+                f"restore:{name or 'active'}",
+                payload={**self._window_payload(target_window=before.get("name") if before else name, before=before), "verified": False},
+                tool="window_restore",
+            )
         if hasattr(self._backend, "restore_app"):
             response = self._backend.restore_app(name=name)
-            return self._result("window_restore", str(response), tool="window_restore")
+            after = self._snapshot_window(name, refresh=True)
+            verified = bool(after and str(after.get("status", "")).lower() not in {"minimized", "maximized"})
+            payload = {**self._window_payload(target_window=before.get("name") if before else name, before=before, after=after), "verified": verified}
+            return self._result("window_restore", str(response), payload=payload, tool="window_restore")
         raise ExecutorError("Backend does not expose restore_app().")
