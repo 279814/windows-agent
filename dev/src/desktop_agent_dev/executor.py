@@ -335,11 +335,58 @@ class Executor:
 
     def shortcut(self, keys: str) -> InputResult:
         if self._backend is None:
-            return self._result("shortcut", f"shortcut:{keys}", tool="input_shortcut")
+            return self._result(
+                "shortcut",
+                f"shortcut:{keys}",
+                payload={
+                    "keys": keys,
+                    "target_window": None,
+                    "focus_before": None,
+                    "focus_after": None,
+                    "focus_changed": None,
+                    "injection_result": {"status": "sent", "method": "synthetic"},
+                },
+                tool="input_shortcut",
+            )
 
         if hasattr(self._backend, "shortcut"):
+            focus_before = None
+            target_window = None
+            try:
+                state = self._backend.get_state(use_vision=False, as_bytes=False)
+                focused = getattr(state, "focused_control", None)
+                if isinstance(focused, dict):
+                    focus_before = focused.get("window_title") or focused.get("name") or focused.get("automation_id")
+                    target_window = focus_before
+                elif focused is not None:
+                    focus_before = getattr(focused, "window_title", None) or getattr(focused, "name", None)
+                    target_window = focus_before
+            except Exception:
+                focus_before = None
+                target_window = None
+
             self._backend.shortcut(keys)
-            return self._result("shortcut", f"shortcut:{keys}", tool="input_shortcut")
+
+            focus_after = None
+            try:
+                state_after = self._backend.get_state(use_vision=False, as_bytes=False)
+                focused_after = getattr(state_after, "focused_control", None)
+                if isinstance(focused_after, dict):
+                    focus_after = focused_after.get("window_title") or focused_after.get("name") or focused_after.get("automation_id")
+                elif focused_after is not None:
+                    focus_after = getattr(focused_after, "window_title", None) or getattr(focused_after, "name", None)
+            except Exception:
+                focus_after = None
+
+            payload = {
+                "keys": keys,
+                "target_window": target_window,
+                "focus_before": focus_before,
+                "focus_after": focus_after,
+                "focus_changed": (focus_before != focus_after) if (focus_before is not None or focus_after is not None) else None,
+                "injection_result": {"status": "sent", "method": "backend.shortcut"},
+            }
+            return self._result("shortcut", f"shortcut:{keys}", payload=payload, tool="input_shortcut")
 
         raise ExecutorError("Backend does not expose shortcut().")
 
@@ -365,11 +412,67 @@ class Executor:
 
     def switch_window(self, name: str) -> InputResult:
         if self._backend is None:
-            return self._result("window_switch", f"switch:{name}", tool="window_switch")
+            return self._result(
+                "window_switch",
+                f"switch:{name}",
+                payload={
+                    "name": name,
+                    "target_window": name,
+                    "previous_window": None,
+                    "previous_handle": None,
+                    "current_window": name,
+                    "current_handle": None,
+                    "matched_by": "name",
+                },
+                tool="window_switch",
+            )
 
         if hasattr(self._backend, "switch_app"):
+            previous_window = None
+            previous_handle = None
+            try:
+                state = self._backend.get_state(use_vision=False, as_bytes=False)
+                active = getattr(state, "active_window", None)
+                if isinstance(active, dict):
+                    previous_window = active.get("name") or active.get("window_title")
+                    previous_handle = active.get("handle")
+                elif active is not None:
+                    previous_window = getattr(active, "name", None) or getattr(active, "window_title", None)
+                    previous_handle = getattr(active, "handle", None)
+            except Exception:
+                previous_window = None
+                previous_handle = None
+
             response = self._backend.switch_app(name)
-            return self._result("window_switch", str(response), tool="window_switch")
+            current_window = None
+            current_handle = None
+            matched_by = "name"
+            try:
+                state_after = self._backend.get_state(use_vision=False, as_bytes=False)
+                active_after = getattr(state_after, "active_window", None)
+                if isinstance(active_after, dict):
+                    current_window = active_after.get("name") or active_after.get("window_title")
+                    current_handle = active_after.get("handle")
+                    matched_by = active_after.get("matched_by") or matched_by
+                elif active_after is not None:
+                    current_window = getattr(active_after, "name", None) or getattr(active_after, "window_title", None)
+                    current_handle = getattr(active_after, "handle", None)
+                    matched_by = getattr(active_after, "matched_by", None) or matched_by
+            except Exception:
+                current_window = None
+                current_handle = None
+
+            payload = {
+                "name": name,
+                "target_window": name,
+                "previous_window": previous_window,
+                "previous_handle": previous_handle,
+                "current_window": current_window,
+                "current_handle": current_handle,
+                "matched_by": matched_by,
+                "backend_response": response,
+            }
+            return self._result("window_switch", str(response), payload=payload, tool="window_switch")
 
         raise ExecutorError("Backend does not expose switch_app().")
 

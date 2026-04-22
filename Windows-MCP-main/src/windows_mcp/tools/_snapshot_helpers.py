@@ -169,6 +169,21 @@ def build_snapshot_response(
         metadata_text += f"Screenshot Backend: {desktop_state.screenshot_backend}\n"
     if ui_detail_note:
         metadata_text += f"{ui_detail_note}\n"
+    focused_control = desktop_state.focused_control or {}
+    focused_control_text = "\n".join(
+        [
+            f"Focused Control Name: {focused_control.get('name')}",
+            f"Focused Control Value: {focused_control.get('value')}",
+            f"Focused Control Text: {focused_control.get('text')}",
+            f"Focused Control Type: {focused_control.get('control_type')}",
+            f"Focused Control AutomationId: {focused_control.get('automation_id')}",
+            f"Focused Control ClassName: {focused_control.get('class_name')}",
+            f"Focused Control Role: {focused_control.get('role')}",
+            f"Focused Control Bounds: {focused_control.get('bounds')}",
+            f"Focused Control Window Title: {focused_control.get('window_title')}",
+            f"Focused Control Source: {focused_control.get('source')}",
+        ]
+    )
 
     response_text = dedent(f'''
     {metadata_text}
@@ -180,6 +195,9 @@ def build_snapshot_response(
 
     Focused Window:
     {active_window}
+
+    Focused Control:
+    {focused_control_text}
 
     Opened Windows:
     {windows}

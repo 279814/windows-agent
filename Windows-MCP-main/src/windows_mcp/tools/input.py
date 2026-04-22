@@ -168,7 +168,14 @@ def register(mcp, *, get_desktop, get_analytics):
 
     @mcp.tool(
         name="Shortcut",
-        description='Executes keyboard shortcuts using key combinations separated by +. Examples: "ctrl+c" (copy), "ctrl+v" (paste), "alt+tab" (switch apps), "win+r" (Run dialog), "win" (Start menu), "ctrl+shift+esc" (Task Manager). Use for quick actions and system commands.',
+        description=(
+            'Executes keyboard shortcuts using key combinations separated by +. '
+            'Examples: "ctrl+c" (copy), "ctrl+v" (paste), "alt+tab" (switch apps), '
+            '"win+r" (Run dialog), "win" (Start menu), "esc" (close modal / panel), '
+            '"ctrl+shift+esc" (Task Manager). Returns the shortcut, normalized key list, '
+            'sendkeys string, and foreground window before/after to help debug focus migration. '
+            'Use for quick actions and system commands.'
+        ),
         annotations=ToolAnnotations(
             title="Shortcut",
             readOnlyHint=False,
@@ -179,8 +186,16 @@ def register(mcp, *, get_desktop, get_analytics):
     )
     @with_analytics(get_analytics(), "Shortcut-Tool")
     def shortcut_tool(shortcut: str, ctx: Context = None):
-        get_desktop().shortcut(shortcut)
-        return f"Pressed {shortcut}."
+        result = get_desktop().shortcut(shortcut)
+        return [
+            "Shortcut executed.",
+            f"shortcut={result['shortcut']}",
+            f"keys={result['keys']}",
+            f"sendkeys={result['sendkeys']}",
+            f"foreground_before={result['foreground_before']}",
+            f"foreground_after={result['foreground_after']}",
+            f"foreground_changed={result['foreground_changed']}",
+        ]
 
     @mcp.tool(
         name="Wait",

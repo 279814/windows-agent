@@ -771,16 +771,37 @@ class Desktop:
         uia.MoveTo(x, y, moveSpeed=10)
 
     def shortcut(self, shortcut: str):
-        keys = shortcut.split("+")
+        keys = [key.strip() for key in shortcut.split("+") if key.strip()]
         sendkeys_str = ""
         for key in keys:
-            key = key.strip()
             if len(key) == 1:
                 sendkeys_str += key
             else:
                 name = _KEY_ALIASES.get(key.lower(), key)
                 sendkeys_str += "{" + name + "}"
+        before_handle = uia.GetForegroundWindow()
+        before_window = None
+        try:
+            before_window = self.get_window_from_element_handle(before_handle)
+        except Exception:
+            before_window = None
         uia.SendKeys(sendkeys_str, interval=0.01)
+        after_handle = uia.GetForegroundWindow()
+        after_window = None
+        try:
+            after_window = self.get_window_from_element_handle(after_handle)
+        except Exception:
+            after_window = None
+        before_name = before_window.Name if before_window is not None else "<unknown>"
+        after_name = after_window.Name if after_window is not None else "<unknown>"
+        return {
+            "shortcut": shortcut,
+            "keys": keys,
+            "sendkeys": sendkeys_str,
+            "foreground_before": before_name,
+            "foreground_after": after_name,
+            "foreground_changed": before_handle != after_handle,
+        }
 
     def multi_select(self, press_ctrl: bool | str = False, locs: list[tuple[int, int]] = []):
         press_ctrl = press_ctrl is True or (
