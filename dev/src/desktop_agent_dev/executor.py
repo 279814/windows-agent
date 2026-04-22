@@ -267,21 +267,37 @@ class Executor:
     ) -> InputResult:
         if self._backend is None:
             suffix = ":enter" if press_enter else ""
-            return self._result("input_type", f"typed:{text}{suffix}", tool="input_type")
+            payload = {
+                "text": text,
+                "press_enter": press_enter,
+                "clear": clear,
+                "caret_position": caret_position,
+                "validation": {"passed": True, "expected_change": False, "changed": None},
+            }
+            return self._result("input_type", f"typed:{text}{suffix}", payload=payload, tool="input_type")
 
         if hasattr(self._backend, "type"):
             focused_before = None
+            before_value = None
             type_loc = (0, 0)
             try:
                 state = self._backend.get_state(use_vision=False, as_bytes=False)
                 focused_before = getattr(state, "focused_control", None)
                 if isinstance(focused_before, dict):
+                    before_value = focused_before.get("value")
                     bounds = focused_before.get("bounds")
+                    if bounds and len(bounds) == 4:
+                        left, top, right, bottom = bounds
+                        type_loc = (int((left + right) / 2), int((top + bottom) / 2))
+                elif focused_before is not None:
+                    before_value = getattr(focused_before, "value", None)
+                    bounds = getattr(focused_before, "bounds", None)
                     if bounds and len(bounds) == 4:
                         left, top, right, bottom = bounds
                         type_loc = (int((left + right) / 2), int((top + bottom) / 2))
             except Exception:
                 focused_before = None
+                before_value = None
             self._backend.type(
                 type_loc,
                 text=text,
@@ -290,16 +306,42 @@ class Executor:
                 caret_position=caret_position,
             )
             suffix = ":enter" if press_enter else ""
+            expected_change = bool(text or clear or press_enter)
+            after_value = None
+            focused_after = None
+            try:
+                state_after = self._backend.get_state(use_vision=False, as_bytes=False)
+                focused_after = getattr(state_after, "focused_control", None)
+                if isinstance(focused_after, dict):
+                    after_value = focused_after.get("value")
+                elif focused_after is not None:
+                    after_value = getattr(focused_after, "value", None)
+            except Exception:
+                focused_after = None
+                after_value = None
+            changed = before_value != after_value if before_value is not None or after_value is not None else None
+            validation_passed = (not expected_change) or (changed is True)
+            detail = f"typed:{text}{suffix}"
+            if expected_change and validation_passed is False:
+                detail = f"validation_failed:{text}{suffix}"
             payload = {
                 "text": text,
                 "press_enter": press_enter,
                 "clear": clear,
                 "caret_position": caret_position,
                 "focused_before": focused_before,
+                "focused_after": focused_after,
                 "target_control": focused_before,
+                "before_value": before_value,
+                "after_value": after_value,
                 "type_location": {"x": type_loc[0], "y": type_loc[1]},
+                "validation": {
+                    "passed": validation_passed,
+                    "expected_change": expected_change,
+                    "changed": changed,
+                },
             }
-            return self._result("input_type", f"typed:{text}{suffix}", payload=payload, tool="input_type")
+            return self._result("input_type", detail, ok=validation_passed, payload=payload, tool="input_type")
 
         raise ExecutorError("Backend does not expose type().")
 
