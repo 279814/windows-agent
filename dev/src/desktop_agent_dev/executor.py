@@ -229,11 +229,11 @@ class Executor:
         element = self._hit_test_element(x, y)
         payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element}
         if self._backend is None:
-            return self._result("click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
+            return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
 
         if hasattr(self._backend, "click"):
             self._backend.click((x, y), button=button, clicks=clicks)
-            return self._result("click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
+            return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
 
         raise ExecutorError("Backend does not expose click().")
 
@@ -267,7 +267,7 @@ class Executor:
     ) -> InputResult:
         if self._backend is None:
             suffix = ":enter" if press_enter else ""
-            return self._result("type", f"typed:{text}{suffix}", tool="input_type")
+            return self._result("input_type", f"typed:{text}{suffix}", tool="input_type")
 
         if hasattr(self._backend, "type"):
             focused_before = None
@@ -299,7 +299,7 @@ class Executor:
                 "target_control": focused_before,
                 "type_location": {"x": type_loc[0], "y": type_loc[1]},
             }
-            return self._result("type", f"typed:{text}{suffix}", payload=payload, tool="input_type")
+            return self._result("input_type", f"typed:{text}{suffix}", payload=payload, tool="input_type")
 
         raise ExecutorError("Backend does not expose type().")
 
@@ -386,7 +386,7 @@ class Executor:
                 "focus_changed": (focus_before != focus_after) if (focus_before is not None or focus_after is not None) else None,
                 "injection_result": {"status": "sent", "method": "backend.shortcut"},
             }
-            return self._result("shortcut", f"shortcut:{keys}", payload=payload, tool="input_shortcut")
+            return self._result("input_shortcut", f"shortcut:{keys}", payload=payload, tool="input_shortcut")
 
         raise ExecutorError("Backend does not expose shortcut().")
 
@@ -479,7 +479,8 @@ class Executor:
                 "restored_from_minimized": restored_from_minimized,
                 "backend_response": response,
             }
-            return self._result("window_switch", str(response), payload=payload, tool="window_switch")
+            detail = str(response[0]) if isinstance(response, tuple) and response else str(response)
+            return self._result("window_switch", detail, payload={**payload, "backend_response": response}, tool="window_switch")
 
         raise ExecutorError("Backend does not expose switch_app().")
 

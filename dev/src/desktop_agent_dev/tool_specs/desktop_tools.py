@@ -105,6 +105,7 @@ def register_desktop_tools(registry: ToolRegistry, services: Any) -> None:
                 "Capture the current desktop state, including the active window, open windows, cursor position, UIA tree, focused control snapshot, and optional screenshot metadata. "
                 "When with_screenshot is enabled, the tool also persists the PNG screenshot to dev/tmp and returns screenshot_path, screenshot_id, and screenshot_handle for direct verification. Current handle is the same value as path, so it should not be treated as a different resource type. The windows list attempts to include visible UI context beyond the active window, including currently visible top-level windows and minimized/background context when exposed by the backend. "
                 "Best for observe-first workflows, pre-action verification, and understanding the current surface before any input or window change.\n\n"
+                "Behavior note: the snapshot is intended to support task_plan/task_state verification loops by reflecting the current desktop state, visible windows, and focused control.\n\n"
                 "Parameters: with_screenshot controls whether a screenshot is attached to the snapshot.\n"
                 "Returns: a normalized observation payload containing active_window, windows, cursor, tree_nodes, focused_control, metadata, screenshot_path, screenshot_id, screenshot_handle, has_screenshot, screenshot_bytes, and error.\n"
                 "Safety: read-only; performs no desktop side effects.\n"
