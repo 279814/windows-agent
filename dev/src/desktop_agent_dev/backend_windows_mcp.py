@@ -66,6 +66,21 @@ def load_windows_mcp_desktop(source_root: str | Path) -> WindowsMcpBackend:
             module.DesktopState = DesktopStateCompat
 
     desktop = module.Desktop()
+    original_get_state = getattr(desktop, "get_state", None)
+    if callable(original_get_state):
+        def get_state_with_focus(*args: Any, **kwargs: Any):
+            state = original_get_state(*args, **kwargs)
+            try:
+                focused_control = getattr(state, "focused_control", None)
+                if focused_control is None and hasattr(state, "tree_state") and getattr(state, "tree_state", None) is not None:
+                    focused_control = getattr(state.tree_state, "focused_node", None) or getattr(state.tree_state, "focus_node", None) or getattr(state.tree_state, "focused_control", None)
+                    if focused_control is not None:
+                        setattr(state, "focused_control", focused_control)
+            except Exception:
+                pass
+            return state
+
+        desktop.get_state = get_state_with_focus
     return WindowsMcpBackend(desktop=desktop, source_path=service_path)
 
 

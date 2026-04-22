@@ -49,7 +49,15 @@ def register_input_tools(registry: ToolRegistry, services: Any) -> None:
         after_control = after_snapshot.focused_control or {}
         before_value = before_control.get("value") or before_control.get("text") or before_control.get("name")
         after_value = after_control.get("value") or after_control.get("text") or after_control.get("name")
+        target_control = (result.payload or {}).get("target_control") or before_snapshot.focused_control
+        target_value_before = None
+        target_value_after = None
+        if isinstance(target_control, dict):
+            target_value_before = target_control.get("value") or target_control.get("text") or target_control.get("name")
+        if isinstance(after_snapshot.focused_control, dict):
+            target_value_after = after_snapshot.focused_control.get("value") or after_snapshot.focused_control.get("text") or after_snapshot.focused_control.get("name")
         value_changed = before_value != after_value
+        target_changed = target_value_before != target_value_after if target_value_before is not None else None
         validation = {
             "checked": True,
             "field": "focused_control.value",
@@ -58,6 +66,10 @@ def register_input_tools(registry: ToolRegistry, services: Any) -> None:
             "changed": value_changed,
             "expected_change": True,
             "passed": (not result.ok) or value_changed,
+            "target_control": target_control,
+            "target_value_before": target_value_before,
+            "target_value_after": target_value_after,
+            "target_changed": target_changed,
         }
         payload = {
             **(result.payload or {}),
