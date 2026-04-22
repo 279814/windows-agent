@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import PureWindowsPath
+from pathlib import Path, PureWindowsPath
+import os
 import re
 from typing import Any
 
@@ -27,6 +28,85 @@ class Executor:
 
     def _result(self, action: str, detail: str, ok: bool = True, payload: dict[str, Any] | None = None, tool: str | None = None) -> InputResult:
         return InputResult(action=action, ok=ok, detail=detail, payload=payload, tool=tool or action)
+
+    def _launch_search_dirs(self) -> list[Path]:
+        candidates = [
+            Path.home() / "Desktop",
+            Path(os.environ.get("PUBLIC", r"C:\Users\Public")) / "Desktop",
+        ]
+        onedrive = os.environ.get("OneDrive")
+        if onedrive:
+            candidates.append(Path(onedrive) / "Desktop")
+        seen: set[str] = set()
+        result: list[Path] = []
+        for candidate in candidates:
+            candidate_key = str(candidate).lower()
+            if candidate_key not in seen and candidate.is_dir():
+                seen.add(candidate_key)
+                result.append(candidate)
+        return result
+
+    @staticmethod
+    def _canonical_launch_name(value: str) -> str:
+        try:
+            basename = PureWindowsPath(value).name
+        except Exception:
+            basename = value
+        basename = basename.strip().lower()
+        for suffix in (".exe", ".lnk", ".url"):
+            if basename.endswith(suffix):
+                basename = basename[: -len(suffix)]
+                break
+        basename = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", basename)
+        return re.sub(r"\s+", " ", basename).strip()
+
+    def _discover_launch_path(self, requested_target: str, alias_map: dict[str, list[str]]) -> tuple[str | None, dict[str, Any] | None]:
+        normalized_requested = self._canonical_launch_name(requested_target)
+        if not normalized_requested:
+            return None, None
+
+        expected_names = {normalized_requested}
+        for alias in alias_map.get(normalized_requested, []):
+            expected_names.add(self._canonical_launch_name(alias))
+        expected_names = {item for item in expected_names if item}
+
+        search_dirs = self._launch_search_dirs()
+        if not search_dirs:
+            return None, None
+
+        discovered: list[tuple[int, str, Path]] = []
+        for base_dir in search_dirs:
+            try:
+                for path in base_dir.rglob("*"):
+                    if not path.is_file():
+                        continue
+                    if path.suffix.lower() not in {".lnk", ".exe", ".url"}:
+                        continue
+                    candidate_name = self._canonical_launch_name(path.name)
+                    if not candidate_name:
+                        continue
+                    if candidate_name in expected_names:
+                        score = 0
+                    elif any(candidate_name.startswith(f"{expected} ") or candidate_name.endswith(f" {expected}") for expected in expected_names):
+                        score = 1
+                    else:
+                        continue
+                    discovered.append((score, len(str(path)), path))
+            except Exception:
+                continue
+
+        if not discovered:
+            return None, None
+
+        discovered.sort(key=lambda item: (item[0], item[1], item[2].name.lower()))
+        best_path = discovered[0][2]
+        discovery = {
+            "source": "desktop_shortcut" if best_path.suffix.lower() in {".lnk", ".url"} else "desktop_executable",
+            "path": str(best_path),
+            "display_name": best_path.stem,
+            "search_roots": [str(item) for item in search_dirs],
+        }
+        return str(best_path), discovery
 
     def _hit_test_element(self, x: int, y: int) -> dict[str, Any]:
         backend = self._backend
@@ -461,7 +541,9 @@ class Executor:
             requested_target = name.strip()
             normalized_key = requested_target.lower()
             matched_target = alias_map.get(normalized_key, [requested_target])[0]
-            resolved_alias = matched_target if matched_target != requested_target else None
+            discovered_target, discovery = self._discover_launch_path(requested_target, alias_map)
+            effective_target = discovered_target or matched_target
+            resolved_alias = effective_target if effective_target != requested_target else None
 
             verification_aliases = {
                 "explorer.exe": ["explorer", "file explorer", "文件资源管理器"],
@@ -490,14 +572,18 @@ class Executor:
             expected_targets = {
                 _canonical_target(requested_target),
                 _canonical_target(matched_target),
+                _canonical_target(effective_target),
             }
             expected_phrases = {
                 _normalized_text(requested_target),
                 _normalized_text(matched_target),
+                _normalized_text(effective_target),
             }
             for alias in verification_aliases.get(matched_target.lower(), []):
                 expected_targets.add(_canonical_target(alias))
                 expected_phrases.add(_normalized_text(alias))
+            if discovery is not None:
+                expected_phrases.add(_normalized_text(discovery.get("display_name")))
 
             expected_targets = {item for item in expected_targets if item}
             expected_phrases = {item for item in expected_phrases if item}
@@ -544,7 +630,7 @@ class Executor:
             except Exception:
                 before_state = None
 
-            response = self._backend.launch_app(matched_target)
+            response = self._backend.launch_app(effective_target)
             response_text = response[0] if isinstance(response, tuple) and response else response
             status = response[1] if isinstance(response, tuple) and len(response) > 1 and isinstance(response[1], int) else None
             pid = response[2] if isinstance(response, tuple) and len(response) > 2 and isinstance(response[2], int) else None
@@ -607,7 +693,9 @@ class Executor:
                 "name": name,
                 "requested_target": requested_target,
                 "matched_target": matched_target,
+                "effective_target": effective_target,
                 "resolved_alias": resolved_alias,
+                "discovery": discovery,
                 "backend_response": response,
                 "status": status,
                 "pid": pid,

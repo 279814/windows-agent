@@ -353,3 +353,54 @@ def test_executor_launch_app_rejects_mpicalc_for_calc() -> None:
     assert result.payload["verification_status"] == "target_mismatch"
     assert result.payload["result_code"] == "TARGET_MISMATCH"
     assert backend.calls[-1][1] == ("calc.exe",)
+
+
+def test_executor_launch_app_prefers_desktop_shortcut_for_third_party_app(tmp_path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    desktop_dir = home_dir / "Desktop"
+    desktop_dir.mkdir(parents=True)
+    shortcut_path = desktop_dir / "Acme Painter.lnk"
+    shortcut_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("USERPROFILE", str(home_dir))
+    monkeypatch.delenv("OneDrive", raising=False)
+    monkeypatch.setenv("PUBLIC", str(tmp_path / "public"))
+
+    backend = FakeExecBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("Acme Painter")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["matched_target"] == "Acme Painter"
+    assert result.payload["effective_target"] == str(shortcut_path)
+    assert result.payload["discovery"]["source"] == "desktop_shortcut"
+    assert result.payload["discovery"]["display_name"] == "Acme Painter"
+    assert backend.calls[-1][1] == (str(shortcut_path),)
+
+
+def test_executor_launch_app_prefers_desktop_executable_for_third_party_app(tmp_path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    desktop_dir = home_dir / "Desktop"
+    desktop_dir.mkdir(parents=True)
+    exe_path = desktop_dir / "Orbit Studio.exe"
+    exe_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("USERPROFILE", str(home_dir))
+    monkeypatch.delenv("OneDrive", raising=False)
+    monkeypatch.setenv("PUBLIC", str(tmp_path / "public"))
+
+    backend = FakeExecBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("Orbit Studio")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["matched_target"] == "Orbit Studio"
+    assert result.payload["effective_target"] == str(exe_path)
+    assert result.payload["discovery"]["source"] == "desktop_executable"
+    assert backend.calls[-1][1] == (str(exe_path),)
