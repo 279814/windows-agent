@@ -540,33 +540,150 @@ class Desktop:
         response, status = PowerShellExecutor.execute_command(command)
         return status == 0 and response.strip().lower() == "true"
 
-    def launch_app(self, name: str) -> tuple[str, int, int]:
+    def _build_launch_candidates(self, name: str) -> list[tuple[str, str]]:
+        normalized = name.strip()
+        lower = normalized.lower()
+        alias_map = {
+            "calc": ["calc", "calculator", "计算器"],
+            "calculator": ["calc", "calculator", "计算器"],
+            "notepad": ["notepad", "记事本"],
+            "settings": ["settings", "设置"],
+            "设置": ["settings", "设置"],
+            "explorer": ["explorer", "文件资源管理器", "file explorer"],
+            "file explorer": ["explorer", "文件资源管理器", "file explorer"],
+            "cmd": ["cmd", "command prompt", "命令提示符"],
+            "command prompt": ["cmd", "command prompt", "命令提示符"],
+            "powershell": ["powershell", "pwsh"],
+            "pwsh": ["powershell", "pwsh"],
+            "terminal": ["terminal", "windows terminal", "终端"],
+            "windows terminal": ["terminal", "windows terminal", "终端"],
+        }
+        candidates: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def add(kind: str, value: str) -> None:
+            key = f"{kind}:{value}".lower()
+            if key not in seen:
+                seen.add(key)
+                candidates.append((kind, value))
+
+        # 1) Direct known aliases and user input
+        for label in alias_map.get(lower, []):
+            add("alias", label)
+        add("direct", normalized)
+
+        # 2) Start menu / installed apps maps
+        add("start_menu", normalized)
+        add("start_menu", lower)
+
+        # 3) Common command and executable names
+        base = normalized.rstrip(".exe")
+        add("command", base)
+        add("command", f"{base}.exe")
+        add("command", lower)
+        add("command", f"{lower}.exe")
+
+        # 4) Shell AppsFolder app IDs and display names
+        add("shell_app", normalized)
+        add("shell_app", lower)
+
+        # 5) Common install directory guesses for direct executable names
+        exe_name = base if base.lower().endswith(".exe") else f"{base}.exe"
+        for folder in [r"C:\Program Files", r"C:\Program Files (x86)", r"C:\ProgramData", os.path.expanduser(r"~\AppData\Local")]:
+            add("install_dir", os.path.join(folder, exe_name))
+
+        return candidates
+
+    def _start_process_and_capture_pid(self, command: str) -> tuple[str, int, int]:
+        response, status = PowerShellExecutor.execute_command(command)
+        pid = 0
+        if status == 0:
+            stripped = response.strip()
+            if stripped.isdigit():
+                pid = int(stripped)
+        return response, status, pid
+
+    def _launch_via_start_menu(self, candidate: str) -> tuple[str, int, int] | None:
         apps_map = self.get_apps_from_start_menu()
-        matched_app = process.extractOne(name, apps_map.keys(), score_cutoff=70)
+        if not apps_map:
+            return None
+        matched_app = process.extractOne(candidate, apps_map.keys(), score_cutoff=60)
         if matched_app is None:
-            return (f"{name.title()} not found in start menu.", 1, 0)
-        app_name, _ = matched_app
+            return None
+        app_name, score = matched_app
         appid = apps_map.get(app_name)
         if appid is None:
-            return (f"{name.title()} not found in start menu.", 1, 0)
+            return None
 
-        pid = 0
         if os.path.exists(appid) or "\\" in appid:
             exe_path = resolve_known_folder_guid_path(appid)
             safe_exe_path = ps_quote(exe_path)
             command = f"Start-Process {safe_exe_path} -PassThru | Select-Object -ExpandProperty Id"
-            response, status = PowerShellExecutor.execute_command(command)
-            if status == 0 and response.strip().isdigit():
-                pid = int(response.strip())
+            response, status, pid = self._start_process_and_capture_pid(command)
+            if status == 0:
+                return (f"Launched via start menu shortcut: {app_name} (score={score}). {response}", 0, pid)
+            return (response, status, pid)
+
+        if not self._check_app_exists(appid):
+            return None
+
+        safe = ps_quote(f"shell:AppsFolder\\{appid}")
+        response, status, pid = self._start_process_and_capture_pid(f"Start-Process {safe}")
+        if status == 0:
+            return (f"Launched registered app: {app_name} (score={score}). {response}", 0, pid)
+        return (response, status, pid)
+
+    def _launch_via_command_name(self, candidate: str) -> tuple[str, int, int] | None:
+        safe = ps_quote(candidate)
+        command = (
+            f"$cmd = Get-Command {safe} -ErrorAction SilentlyContinue; "
+            f"if ($cmd -and $cmd.Source) {{ $cmd.Source }} elseif ($cmd) {{ $cmd.Path }} else {{ $null }}"
+        )
+        response, status = PowerShellExecutor.execute_command(command)
+        resolved = response.strip()
+        if status != 0 or not resolved:
+            return None
+
+        if resolved.lower().endswith(".exe") or os.path.sep in resolved or "\\" in resolved:
+            safe_path = ps_quote(resolved)
+            launch_cmd = f"Start-Process {safe_path} -PassThru | Select-Object -ExpandProperty Id"
         else:
-            if not self._check_app_exists(appid):
-                return (f"Invalid app identifier: {appid}", 1, 0)
+            launch_cmd = f"Start-Process {ps_quote(resolved)} -PassThru | Select-Object -ExpandProperty Id"
+        return self._start_process_and_capture_pid(launch_cmd)
 
-            safe = ps_quote(f"shell:AppsFolder\\{appid}")
-            command = f"Start-Process {safe}"
-            response, status = PowerShellExecutor.execute_command(command)
+    def _launch_via_direct_path(self, candidate: str) -> tuple[str, int, int] | None:
+        if not os.path.exists(candidate):
+            return None
+        safe = ps_quote(resolve_known_folder_guid_path(candidate))
+        command = f"Start-Process {safe} -PassThru | Select-Object -ExpandProperty Id"
+        return self._start_process_and_capture_pid(command)
 
-        return response, status, pid
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        candidates = self._build_launch_candidates(name)
+        attempts: list[str] = []
+
+        for kind, candidate in candidates:
+            attempts.append(f"{kind}:{candidate}")
+            if kind in {"alias", "start_menu", "shell_app"}:
+                result = self._launch_via_start_menu(candidate)
+            elif kind == "command":
+                result = self._launch_via_command_name(candidate)
+            elif kind == "install_dir":
+                result = self._launch_via_direct_path(candidate)
+            else:
+                result = self._launch_via_start_menu(candidate) or self._launch_via_command_name(candidate) or self._launch_via_direct_path(candidate)
+
+            if result is None:
+                continue
+
+            response, status, pid = result
+            if status == 0:
+                return (f"{response} [attempted={' ; '.join(attempts)}]", status, pid)
+
+            # Keep trying other candidates if the current path failed.
+            attempts.append(f"failed:{kind}:{candidate}")
+
+        return (f"Unable to launch {name}. Attempts: {' ; '.join(attempts)}", 1, 0)
 
     def switch_app(self, name: str):
         try:
