@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from os import environ
 
 from mcp.server.fastmcp import FastMCP
 
@@ -26,6 +27,8 @@ class AppServices:
 
 class DesktopMCPServer:
     def __init__(self, windows_mcp_root: str | Path | None = None) -> None:
+        if windows_mcp_root is None:
+            windows_mcp_root = environ.get("WINDOWS_MCP_ROOT") or environ.get("WINDOWS_MCP_WORKSPACE")
         self._windows_mcp_root = Path(windows_mcp_root) if windows_mcp_root else None
         self._backend_bundle = None
         if self._windows_mcp_root is not None:

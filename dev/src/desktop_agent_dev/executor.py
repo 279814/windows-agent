@@ -430,18 +430,24 @@ class Executor:
         if hasattr(self._backend, "switch_app"):
             previous_window = None
             previous_handle = None
+            restored_from_minimized = None
             try:
                 state = self._backend.get_state(use_vision=False, as_bytes=False)
                 active = getattr(state, "active_window", None)
                 if isinstance(active, dict):
                     previous_window = active.get("name") or active.get("window_title")
                     previous_handle = active.get("handle")
+                    status = str(active.get("status") or "").lower()
+                    restored_from_minimized = status == "minimized"
                 elif active is not None:
                     previous_window = getattr(active, "name", None) or getattr(active, "window_title", None)
                     previous_handle = getattr(active, "handle", None)
+                    status = str(getattr(active, "status", "") or "").lower()
+                    restored_from_minimized = status == "minimized"
             except Exception:
                 previous_window = None
                 previous_handle = None
+                restored_from_minimized = None
 
             response = self._backend.switch_app(name)
             current_window = None
@@ -470,6 +476,7 @@ class Executor:
                 "current_window": current_window,
                 "current_handle": current_handle,
                 "matched_by": matched_by,
+                "restored_from_minimized": restored_from_minimized,
                 "backend_response": response,
             }
             return self._result("window_switch", str(response), payload=payload, tool="window_switch")
