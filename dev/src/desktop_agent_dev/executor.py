@@ -795,9 +795,25 @@ class Executor:
                 return None
             return None
 
-        before = _current_window_snapshot()
+        before = _current_window_snapshot() or {
+            "name": name,
+            "status": None,
+            "handle": None,
+        }
         if self._backend is None:
-            return self._result("window_minimize", f"minimize:{name or 'active'}", payload={"target_window": name, "before_status": None, "after_status": None, "verified": False}, tool="window_minimize")
+            return self._result(
+                "window_minimize",
+                f"minimize:{name or 'active'}",
+                payload={
+                    "target_window": before.get("name") if before else name,
+                    "before_status": before.get("status") if before else None,
+                    "after_status": None,
+                    "verified": False,
+                    "before_window": before,
+                    "after_window": None,
+                },
+                tool="window_minimize",
+            )
         if hasattr(self._backend, "minimize_app"):
             response = self._backend.minimize_app(name=name)
             after = _current_window_snapshot()
