@@ -31,6 +31,7 @@ import logging
 import random
 import ctypes
 import csv
+import glob
 import re
 import os
 import io
@@ -577,7 +578,7 @@ class Desktop:
         add("start_menu", lower)
 
         # 3) Common command and executable names
-        base = normalized.rstrip(".exe")
+        base = normalized.removesuffix(".exe")
         add("command", base)
         add("command", f"{base}.exe")
         add("command", lower)
@@ -591,8 +592,58 @@ class Desktop:
         exe_name = base if base.lower().endswith(".exe") else f"{base}.exe"
         for folder in [r"C:\Program Files", r"C:\Program Files (x86)", r"C:\ProgramData", os.path.expanduser(r"~\AppData\Local")]:
             add("install_dir", os.path.join(folder, exe_name))
+            add("install_scan", folder)
 
         return candidates
+
+    def _scan_install_dirs_for_exe(self, search_name: str) -> list[str]:
+        """Search common program directories for a matching executable or shortcut.
+
+        This is intentionally bounded and recursive only a few levels deep so we
+        can cover common vendor subfolders without turning launch into a full disk scan.
+        """
+        normalized = search_name.strip().lower()
+        if not normalized:
+            return []
+
+        candidates = {normalized}
+        if normalized.endswith(".exe"):
+            candidates.add(normalized[:-4])
+        else:
+            candidates.add(f"{normalized}.exe")
+
+        roots = [
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+            os.environ.get("ProgramData", r"C:\ProgramData"),
+            os.path.expanduser(r"~\AppData\Local"),
+        ]
+        search_roots = [root for root in roots if root and os.path.isdir(root)]
+
+        results: list[str] = []
+        max_depth = 4
+        max_results = 12
+        for root in search_roots:
+            for current_root, dirs, files in os.walk(root):
+                depth = current_root[len(root):].count(os.sep)
+                if depth >= max_depth:
+                    dirs[:] = []
+                lowered_dirs = [d.lower() for d in dirs]
+                if "appdata" in current_root.lower():
+                    dirs[:] = []
+                for filename in files:
+                    lower = filename.lower()
+                    stem = os.path.splitext(lower)[0]
+                    if lower.endswith((".exe", ".lnk")) and (
+                        lower in candidates or stem in candidates or normalized in lower
+                    ):
+                        results.append(os.path.join(current_root, filename))
+                        if len(results) >= max_results:
+                            return results
+                # Focus on likely vendor / app folders and avoid huge tree explosion.
+                if not any(token in current_root.lower() for token in (normalized, "program files", "programdata", "windows", "appdata")):
+                    dirs[:] = [d for d in dirs if d.lower() not in {"temp", "cache", "logs", "update", "updates"}]
+        return results
 
     def _start_process_and_capture_pid(self, command: str) -> tuple[str, int, int]:
         response, status = PowerShellExecutor.execute_command(command)
@@ -658,18 +709,93 @@ class Desktop:
         command = f"Start-Process {safe} -PassThru | Select-Object -ExpandProperty Id"
         return self._start_process_and_capture_pid(command)
 
+    def _launch_via_path_or_shortcut(self, path: str) -> tuple[str, int, int] | None:
+        if not os.path.exists(path):
+            return None
+        resolved = resolve_known_folder_guid_path(path)
+        safe = ps_quote(resolved)
+        if resolved.lower().endswith(".lnk"):
+            command = f"Start-Process {safe} -PassThru | Select-Object -ExpandProperty Id"
+        else:
+            command = f"Start-Process {safe} -PassThru | Select-Object -ExpandProperty Id"
+        return self._start_process_and_capture_pid(command)
+
+    def _find_launch_verification_window(self, name: str, pid: int = 0) -> tuple[str | None, int | None, str]:
+        try:
+            state = self.get_state(use_vision=False, as_bytes=False)
+        except Exception:
+            return None, None, "state_unavailable"
+
+        windows = list(getattr(state, "windows", []) or [])
+        if not windows:
+            return None, None, "no_windows"
+
+        normalized = name.strip().lower()
+        alias_candidates = {
+            normalized,
+            normalized.removesuffix(".exe"),
+            f"{normalized}.exe",
+        }
+        if normalized in {"calc", "calculator", "计算器"}:
+            alias_candidates.update({"calculator", "calc", "计算器"})
+        elif normalized in {"settings", "设置"}:
+            alias_candidates.update({"settings", "设置"})
+        elif normalized in {"notepad", "记事本"}:
+            alias_candidates.update({"notepad", "记事本"})
+        elif normalized in {"explorer", "file explorer", "文件资源管理器"}:
+            alias_candidates.update({"explorer", "file explorer", "文件资源管理器"})
+        elif normalized in {"cmd", "command prompt", "命令提示符"}:
+            alias_candidates.update({"cmd", "command prompt", "命令提示符"})
+        elif normalized in {"powershell", "pwsh"}:
+            alias_candidates.update({"powershell", "pwsh"})
+        elif normalized in {"terminal", "windows terminal", "终端"}:
+            alias_candidates.update({"terminal", "windows terminal", "终端"})
+
+        for window in windows:
+            window_name = (getattr(window, "name", None) or getattr(window, "window_title", None) or "").strip()
+            window_pid = getattr(window, "process_id", None)
+            window_name_lower = window_name.lower()
+            if pid and window_pid == pid:
+                return window_name or None, window_pid, "pid"
+            if any(token and token in window_name_lower for token in alias_candidates):
+                return window_name or None, window_pid, "name"
+        return None, None, "no_match"
+
     def launch_app(self, name: str) -> tuple[str, int, int]:
         candidates = self._build_launch_candidates(name)
         attempts: list[str] = []
+        launch_results: list[str] = []
+        directory_hits = self._scan_install_dirs_for_exe(name)
+
+        def _verify_and_return(response: str, pid: int, attempt_label: str) -> tuple[str, int, int] | None:
+            launch_verification_name, launch_verification_pid, verification_source = self._find_launch_verification_window(name, pid=pid)
+            if launch_verification_name is not None:
+                detail = (
+                    f"{response} [attempted={' ; '.join(attempts)}; verification={verification_source}:{launch_verification_name}]"
+                )
+                return (detail, 0, launch_verification_pid or pid)
+            # No PID or PID did not resolve yet, but a window may already be visible.
+            if pid == 0:
+                launch_verification_name, launch_verification_pid, verification_source = self._find_launch_verification_window(name, pid=0)
+                if launch_verification_name is not None:
+                    detail = (
+                        f"{response} [attempted={' ; '.join(attempts)}; verification={verification_source}:{launch_verification_name}]"
+                    )
+                    return (detail, 0, launch_verification_pid or 0)
+            launch_results.append(f"unverified:{attempt_label}")
+            return None
 
         for kind, candidate in candidates:
             attempts.append(f"{kind}:{candidate}")
+            result: tuple[str, int, int] | None
             if kind in {"alias", "start_menu", "shell_app"}:
                 result = self._launch_via_start_menu(candidate)
             elif kind == "command":
                 result = self._launch_via_command_name(candidate)
             elif kind == "install_dir":
                 result = self._launch_via_direct_path(candidate)
+            elif kind == "install_scan":
+                result = self._launch_via_path_or_shortcut(candidate)
             else:
                 result = self._launch_via_start_menu(candidate) or self._launch_via_command_name(candidate) or self._launch_via_direct_path(candidate)
 
@@ -677,13 +803,36 @@ class Desktop:
                 continue
 
             response, status, pid = result
+            launch_results.append(response)
             if status == 0:
-                return (f"{response} [attempted={' ; '.join(attempts)}]", status, pid)
-
-            # Keep trying other candidates if the current path failed.
+                verified = _verify_and_return(response, pid, f"{kind}:{candidate}")
+                if verified is not None:
+                    return verified
             attempts.append(f"failed:{kind}:{candidate}")
 
-        return (f"Unable to launch {name}. Attempts: {' ; '.join(attempts)}", 1, 0)
+        # Retry using discovered install paths / shortcuts.
+        for path in directory_hits[:12]:
+            attempts.append(f"scan:{path}")
+            result = self._launch_via_path_or_shortcut(path)
+            if result is None:
+                continue
+            response, status, pid = result
+            launch_results.append(response)
+            if status == 0:
+                verified = _verify_and_return(response, pid, f"scan:{path}")
+                if verified is not None:
+                    return verified
+            attempts.append(f"failed:scan:{path}")
+
+        # Final verification pass for cases where launch succeeded but pid was unavailable.
+        launch_verification_name, launch_verification_pid, verification_source = self._find_launch_verification_window(name, pid=0)
+        if launch_verification_name is not None:
+            detail = (
+                f"Launched {name} without PID confirmation, but window appeared. [attempted={' ; '.join(attempts)}; verification={verification_source}:{launch_verification_name}]"
+            )
+            return (detail, 0, launch_verification_pid or 0)
+
+        return (f"Unable to launch {name}. Attempts: {' ; '.join(attempts)}; launch_results={' | '.join(launch_results)}", 1, 0)
 
     def switch_app(self, name: str):
         try:
