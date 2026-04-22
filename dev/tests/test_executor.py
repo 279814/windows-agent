@@ -10,14 +10,15 @@ class FakeWindowState:
 
 
 class FakeDesktopState:
-    def __init__(self, active_window: FakeWindowState | None) -> None:
+    def __init__(self, active_window: FakeWindowState | None, windows: list[FakeWindowState] | None = None) -> None:
         self.active_window = active_window
+        self.windows = windows or ([active_window] if active_window is not None else [])
 
 
 class FakeExecBackend:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple, dict]] = []
-        self._state = FakeDesktopState(FakeWindowState())
+        self._state = FakeDesktopState(FakeWindowState(), windows=[FakeWindowState()])
 
     def click(self, loc: tuple[int, int], button: str = "left", clicks: int = 1) -> None:
         self.calls.append(("click", (loc,), {"button": button, "clicks": clicks}))
@@ -73,9 +74,20 @@ class FakeExecBackend:
         self.calls.append(("resize_app", (), {"name": name, "size": size, "loc": loc}))
         return f"resize:{name}"
 
-    def launch_app(self, name: str) -> str:
+    def launch_app(self, name: str) -> tuple[str, int, int]:
         self.calls.append(("launch_app", (name,), {}))
-        return f"launch:{name}"
+        display_names = {
+            "calc.exe": "Calculator",
+            "explorer.exe": "File Explorer",
+            "notepad.exe": "desktop-agent-dev input_type smoke - Notepad",
+            "mspaint.exe": "Paint",
+        }
+        target_name = display_names.get(name, name)
+        new_window = FakeWindowState(name=target_name, handle=99, status="normal")
+        current_windows = list(self._state.windows)
+        current_windows.append(new_window)
+        self._state = FakeDesktopState(new_window, windows=current_windows)
+        return (f"Launched {name}. [verification=name:{target_name}]", 0, 4242)
 
     def get_state(self, use_vision: bool = False, as_bytes: bool = False) -> FakeDesktopState:
         return self._state
@@ -109,7 +121,7 @@ def test_executor_uses_backend_for_input() -> None:
     launch_result = executor.launch_app("calc")
     assert launch_result.action == "input_launch_app"
     assert launch_result.ok is True
-    assert launch_result.detail == "launch:calc"
+    assert launch_result.detail == "launched:calc"
 
     call_names = [name for name, _, _ in backend.calls]
     assert call_names == [
@@ -213,6 +225,24 @@ class FakeFailBackend(FakeExecBackend):
         return (f"Failed to close {name}.", 1)
 
 
+class FakeLaunchMismatchBackend(FakeExecBackend):
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        self.calls.append(("launch_app", (name,), {}))
+        wrong_window = FakeWindowState(name="Codex", handle=100, status="normal")
+        self._state = FakeDesktopState(wrong_window, windows=list(self._state.windows))
+        return (f"Launched via start menu shortcut: endnote (score=61). [verification=name:{wrong_window.name}]", 0, 0)
+
+
+class FakeMpicalcBackend(FakeExecBackend):
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        self.calls.append(("launch_app", (name,), {}))
+        wrong_window = FakeWindowState(name="C:\\Program Files\\Git\\usr\\bin\\mpicalc.exe", handle=101, status="normal")
+        current_windows = list(self._state.windows)
+        current_windows.append(wrong_window)
+        self._state = FakeDesktopState(wrong_window, windows=current_windows)
+        return (f"Launched {name} without PID confirmation, but window appeared. [verification=name:{wrong_window.name}]", 0, 17000)
+
+
 def test_executor_close_window_marks_backend_failure_as_not_ok() -> None:
     backend = FakeFailBackend()
     executor = Executor(backend=backend)
@@ -241,10 +271,12 @@ def test_executor_launch_app_returns_complete_result() -> None:
     assert result.tool == "input_launch_app"
     assert result.payload["name"] == "calc"
     assert result.payload["requested_target"] == "calc"
-    assert result.payload["matched_target"] == "calc"
+    assert result.payload["matched_target"] == "calc.exe"
     assert "backend_response" in result.payload
     assert "window_detected" in result.payload
-    assert result.payload["verification_status"] in {"success", "partial"}
+    assert result.payload["verification_status"] == "success"
+    assert result.payload["result_code"] == "OK"
+    assert result.payload["verification_hint"] == "Calculator"
 
 
 def test_executor_launch_app_maps_explorer_alias_and_reports_verification() -> None:
@@ -253,29 +285,49 @@ def test_executor_launch_app_maps_explorer_alias_and_reports_verification() -> N
 
     result = executor.launch_app("explorer")
 
-    assert result.ok is False
+    assert result.ok is True
     assert result.payload is not None
     assert result.payload["requested_target"] == "explorer"
     assert result.payload["matched_target"] == "explorer.exe"
     assert result.payload["resolved_alias"] == "explorer.exe"
-    assert result.payload["verification_status"] == "target_mismatch"
-    assert result.payload["result_code"] == "TARGET_MISMATCH"
-    assert result.payload["warning"] is not None
+    assert result.payload["verification_status"] == "success"
+    assert result.payload["result_code"] == "OK"
+    assert result.payload["warning"] is None
     assert backend.calls[-1][0] == "launch_app"
     assert backend.calls[-1][1] == ("explorer.exe",)
 
 
-def test_executor_launch_app_rejects_inexact_calc_mismatch() -> None:
-    backend = FakeExecBackend()
+def test_executor_launch_app_reports_target_mismatch() -> None:
+    backend = FakeLaunchMismatchBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("notepad")
+
+    assert result.ok is False
+    assert result.payload is not None
+    assert result.payload["requested_target"] == "notepad"
+    assert result.payload["matched_target"] == "notepad.exe"
+    assert result.payload["verification_status"] == "target_mismatch"
+    assert result.payload["result_code"] == "TARGET_MISMATCH"
+    assert result.payload["warning"] is not None
+    assert result.payload["detected_window_name"] == "Codex"
+    assert backend.calls[-1][1] == ("notepad.exe",)
+
+
+def test_executor_launch_app_rejects_mpicalc_for_calc() -> None:
+    backend = FakeMpicalcBackend()
     executor = Executor(backend=backend)
 
     result = executor.launch_app("calc")
 
     assert result.ok is False
+    assert result.detail == "target mismatch:calc->C:\\Program Files\\Git\\usr\\bin\\mpicalc.exe"
     assert result.payload is not None
     assert result.payload["requested_target"] == "calc"
     assert result.payload["matched_target"] == "calc.exe"
+    assert result.payload["detected_window_name"] == "C:\\Program Files\\Git\\usr\\bin\\mpicalc.exe"
+    assert result.payload["verification_hint"] == "C:\\Program Files\\Git\\usr\\bin\\mpicalc.exe"
+    assert result.payload["target_matches"] is False
     assert result.payload["verification_status"] == "target_mismatch"
     assert result.payload["result_code"] == "TARGET_MISMATCH"
-    assert result.payload["warning"] is not None
     assert backend.calls[-1][1] == ("calc.exe",)

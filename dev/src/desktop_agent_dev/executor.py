@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PureWindowsPath
+import re
 from typing import Any
 
 
@@ -461,6 +463,79 @@ class Executor:
             matched_target = alias_map.get(normalized_key, [requested_target])[0]
             resolved_alias = matched_target if matched_target != requested_target else None
 
+            verification_aliases = {
+                "explorer.exe": ["explorer", "file explorer", "文件资源管理器"],
+                "calc.exe": ["calc", "calculator"],
+                "notepad.exe": ["notepad"],
+                "mspaint.exe": ["mspaint", "paint"],
+            }
+            verification_blacklist = {
+                "calc.exe": {"mpicalc"},
+            }
+
+            def _canonical_target(value: str) -> str:
+                try:
+                    basename = PureWindowsPath(value).name
+                except Exception:
+                    basename = value
+                if basename.lower().endswith(".exe"):
+                    return basename[:-4].lower()
+                return basename.lower()
+
+            def _normalized_text(value: Any) -> str:
+                text = str(value or "").strip().lower()
+                text = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", text)
+                return re.sub(r"\s+", " ", text).strip()
+
+            expected_targets = {
+                _canonical_target(requested_target),
+                _canonical_target(matched_target),
+            }
+            expected_phrases = {
+                _normalized_text(requested_target),
+                _normalized_text(matched_target),
+            }
+            for alias in verification_aliases.get(matched_target.lower(), []):
+                expected_targets.add(_canonical_target(alias))
+                expected_phrases.add(_normalized_text(alias))
+
+            expected_targets = {item for item in expected_targets if item}
+            expected_phrases = {item for item in expected_phrases if item}
+            blacklisted_targets = verification_blacklist.get(matched_target.lower(), set())
+
+            def _contains_phrase_tokens(words: list[str], phrase_words: list[str]) -> bool:
+                if not words or not phrase_words or len(phrase_words) > len(words):
+                    return False
+                for index in range(len(words) - len(phrase_words) + 1):
+                    if words[index : index + len(phrase_words)] == phrase_words:
+                        return True
+                return False
+
+            def _matches_expected(candidate: Any) -> bool:
+                normalized_candidate = _normalized_text(candidate)
+                if not normalized_candidate:
+                    return False
+                candidate_target = _canonical_target(str(candidate))
+                if candidate_target in blacklisted_targets:
+                    return False
+                if candidate_target in expected_targets:
+                    return True
+                candidate_words = normalized_candidate.split()
+                if set(candidate_words).intersection(expected_targets):
+                    return True
+                for phrase in expected_phrases:
+                    phrase_words = phrase.split()
+                    if phrase_words and _contains_phrase_tokens(candidate_words, phrase_words):
+                        return True
+                return False
+
+            def _extract_verification_hint(value: Any) -> str | None:
+                text = str(value or "")
+                match = re.search(r"verification=name:([^\]\r\n]+)", text, flags=re.IGNORECASE)
+                if match:
+                    return match.group(1).strip()
+                return None
+
             before_state = None
             after_state = None
             try:
@@ -473,7 +548,8 @@ class Executor:
             response_text = response[0] if isinstance(response, tuple) and response else response
             status = response[1] if isinstance(response, tuple) and len(response) > 1 and isinstance(response[1], int) else None
             pid = response[2] if isinstance(response, tuple) and len(response) > 2 and isinstance(response[2], int) else None
-            launched = status == 0
+            launched = status == 0 if status is not None else bool(response)
+            verification_hint = _extract_verification_hint(response_text)
             detected = False
             detected_name = None
             try:
@@ -481,25 +557,52 @@ class Executor:
                 after_state = getattr(state_after, "windows", None)
                 before_count = len(before_state) if isinstance(before_state, list) else None
                 after_count = len(after_state) if isinstance(after_state, list) else None
-                if before_count is not None and after_count is not None and after_count > before_count:
-                    detected = True
+                window_count_increased = bool(before_count is not None and after_count is not None and after_count > before_count)
+                detected = window_count_increased
                 active_after = getattr(state_after, "active_window", None)
                 if isinstance(active_after, dict):
                     current_name = active_after.get("name") or active_after.get("window_title")
                     detected_name = current_name
-                    detected = detected and current_name is not None and str(current_name).lower().find(matched_target.lower()) >= 0
+                    if _matches_expected(current_name):
+                        detected = True
                 elif active_after is not None:
                     current_name = getattr(active_after, "name", None) or getattr(active_after, "window_title", None)
                     detected_name = current_name
-                    detected = detected and current_name is not None and str(current_name).lower().find(matched_target.lower()) >= 0
+                    if _matches_expected(current_name):
+                        detected = True
             except Exception:
                 after_state = None
 
-            target_matches = detected_name is not None and str(detected_name).lower().find(matched_target.lower()) >= 0
-            verification_ok = bool(launched and detected and target_matches)
-            verification_status = "success" if verification_ok else ("failed" if not launched else "target_mismatch")
-            result_code = "OK" if verification_ok else ("LAUNCH_FAILED" if not launched else "TARGET_MISMATCH")
-            detail = f"launched:{name}" if verification_ok else (f"launch failed:{name}" if not launched else f"target mismatch:{name}->{detected_name}")
+            target_matches = _matches_expected(detected_name) or _matches_expected(verification_hint)
+            mismatch_signals = [
+                candidate
+                for candidate in (detected_name, verification_hint)
+                if candidate is not None and str(candidate).strip() and not _matches_expected(candidate)
+            ]
+            verification_evidence = bool(
+                target_matches
+                or detected
+                or (pid is not None and pid > 0)
+                or (response_text is not None and str(response_text).strip())
+            )
+            verification_ok = bool(launched and target_matches)
+            mismatch_detected = bool(launched and not verification_ok and mismatch_signals)
+            partial_ok = bool(launched and not verification_ok and not mismatch_detected and verification_evidence)
+            verification_status = (
+                "success"
+                if verification_ok
+                else ("partial" if partial_ok else ("failed" if not launched else "target_mismatch"))
+            )
+            result_code = (
+                "OK"
+                if verification_ok
+                else ("PARTIAL" if partial_ok else ("LAUNCH_FAILED" if not launched else "TARGET_MISMATCH"))
+            )
+            detail = (
+                f"launched:{name}"
+                if verification_ok
+                else (f"launch pending verification:{name}" if partial_ok else (f"launch failed:{name}" if not launched else f"target mismatch:{name}->{detected_name}"))
+            )
             payload = {
                 "name": name,
                 "requested_target": requested_target,
@@ -512,12 +615,13 @@ class Executor:
                 "after_window_count": len(after_state) if isinstance(after_state, list) else None,
                 "window_detected": detected,
                 "detected_window_name": detected_name,
+                "verification_hint": verification_hint,
                 "target_matches": target_matches,
                 "verification_status": verification_status,
                 "result_code": result_code,
-                "warning": None if verification_ok else "launch outcome could not be verified against the requested target",
+                "warning": None if verification_ok else ("launch outcome could not be fully verified against the requested target" if partial_ok else "launch outcome could not be verified against the requested target"),
             }
-            return self._result("input_launch_app", detail, ok=verification_ok, payload=payload, tool="input_launch_app")
+            return self._result("input_launch_app", detail, ok=(verification_ok or partial_ok), payload=payload, tool="input_launch_app")
 
         raise ExecutorError("Backend does not expose launch_app().")
 
