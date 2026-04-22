@@ -25,6 +25,7 @@ from windows_mcp.desktop import screenshot as screenshot_capture
 from locale import getpreferredencoding
 from contextlib import contextmanager
 from typing import Any, Literal
+from pathlib import PureWindowsPath
 from markdownify import markdownify
 from fuzzywuzzy import process
 from time import sleep, time, perf_counter
@@ -83,10 +84,108 @@ def _escape_text_for_sendkeys(text: str) -> str:
 
 
 class Desktop:
+    _SHORTCUT_NOISE_PATTERNS = (
+        r"\s*-\s*快捷方式$",
+        r"\s*快捷方式$",
+        r"\s*-\s*shortcut$",
+        r"\s*shortcut$",
+    )
+    _VERSION_TAIL_PATTERNS = (
+        r"\s+v?\d{4}(?:\.\d+){0,3}$",
+        r"\s+v?\d+(?:\.\d+){1,3}$",
+        r"\s+(?:version|ver)\.?\s*\d+(?:\.\d+){0,3}$",
+    )
+
     def __init__(self):
         self.encoding = getpreferredencoding()
         self.tree = Tree(self)
         self.desktop_state = None
+
+    def _strip_launch_noise(self, value: str) -> str:
+        try:
+            basename = PureWindowsPath(str(value or "")).name
+        except Exception:
+            basename = str(value or "")
+        basename = basename.strip()
+        previous = None
+        while basename and basename != previous:
+            previous = basename
+            for pattern in self._SHORTCUT_NOISE_PATTERNS:
+                basename = re.sub(pattern, "", basename, flags=re.IGNORECASE)
+            for suffix in (".lnk", ".url", ".exe"):
+                if basename.lower().endswith(suffix):
+                    basename = basename[: -len(suffix)].rstrip()
+        return re.sub(r"\s+", " ", basename).strip()
+
+    def _canonical_launch_name(self, value: str) -> str:
+        normalized = self._strip_launch_noise(value).lower()
+        normalized = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", normalized)
+        return re.sub(r"\s+", " ", normalized).strip()
+
+    def _launch_name_variants(self, value: str) -> set[str]:
+        text = str(value or "").strip()
+        if not text:
+            return set()
+
+        variants: set[str] = set()
+
+        def _add(candidate: str) -> None:
+            normalized = self._canonical_launch_name(candidate)
+            if normalized:
+                variants.add(normalized)
+
+        _add(text)
+        cleaned = self._strip_launch_noise(text)
+        _add(cleaned)
+        for pattern in self._VERSION_TAIL_PATTERNS:
+            shortened = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
+            if shortened and shortened != cleaned:
+                _add(shortened)
+        try:
+            path = PureWindowsPath(text)
+            for candidate in [path.name, path.stem]:
+                _add(candidate)
+            for part in list(path.parts)[-4:]:
+                if ":" not in part and part not in {"\\", "/"}:
+                    _add(part)
+        except Exception:
+            pass
+        return {item for item in variants if item}
+
+    def _contains_phrase_tokens(self, words: list[str], phrase_words: list[str]) -> bool:
+        if not words or not phrase_words or len(phrase_words) > len(words):
+            return False
+        for index in range(len(words) - len(phrase_words) + 1):
+            if words[index : index + len(phrase_words)] == phrase_words:
+                return True
+        return False
+
+    def _iter_related_pids(self, pid: int | None) -> set[int]:
+        if not pid:
+            return set()
+        related = {pid}
+        try:
+            proc = Process(pid)
+            for child in proc.children(recursive=True):
+                related.add(child.pid)
+        except Exception:
+            pass
+        return related
+
+    def _process_verification_signature(self, pid: int | None) -> tuple[set[str], str | None]:
+        if not pid:
+            return set(), None
+        signatures: set[str] = set()
+        label = None
+        try:
+            proc = Process(pid)
+            for candidate in [proc.name(), proc.exe(), " ".join(proc.cmdline()[:2])]:
+                if candidate:
+                    signatures.update(self._launch_name_variants(candidate))
+                    label = label or str(candidate)
+        except Exception:
+            return set(), None
+        return signatures, label
 
     def _control_text_snapshot(self, control: Any | None, window_name: str | None = None) -> dict[str, Any] | None:
         if control is None:
@@ -804,45 +903,87 @@ class Desktop:
             command = f"Start-Process {safe} -PassThru | Select-Object -ExpandProperty Id"
         return self._start_process_and_capture_pid(command)
 
-    def _find_launch_verification_window(self, name: str, pid: int = 0) -> tuple[str | None, int | None, str]:
-        try:
-            state = self.get_state(use_vision=False, as_bytes=False)
-        except Exception:
-            return None, None, "state_unavailable"
+    def _find_launch_verification_window(
+        self,
+        name: str,
+        pid: int = 0,
+        *,
+        known_pids: list[int] | None = None,
+        baseline_handles: set[int] | None = None,
+        attempts: int = 1,
+        delay_seconds: float = 0.4,
+    ) -> tuple[str | None, int | None, str]:
+        expected_targets = self._launch_name_variants(name)
+        if not expected_targets:
+            return None, None, "no_expected_target"
 
-        windows = list(getattr(state, "windows", []) or [])
-        if not windows:
-            return None, None, "no_windows"
-
-        normalized = name.strip().lower()
-        alias_candidates = {
-            normalized,
-            normalized.removesuffix(".exe"),
-            f"{normalized}.exe",
+        alias_map = {
+            "calc": {"calc", "calculator", "计算器"},
+            "calculator": {"calc", "calculator", "计算器"},
+            "settings": {"settings", "设置"},
+            "notepad": {"notepad", "记事本"},
+            "explorer": {"explorer", "file explorer", "文件资源管理器"},
+            "file explorer": {"explorer", "file explorer", "文件资源管理器"},
+            "cmd": {"cmd", "command prompt", "命令提示符"},
+            "command prompt": {"cmd", "command prompt", "命令提示符"},
+            "powershell": {"powershell", "pwsh"},
+            "pwsh": {"powershell", "pwsh"},
+            "terminal": {"terminal", "windows terminal", "终端"},
+            "windows terminal": {"terminal", "windows terminal", "终端"},
+            "wechat": {"wechat", "weixin", "微信"},
+            "weixin": {"wechat", "weixin", "微信"},
+            "微信": {"wechat", "weixin", "微信"},
         }
-        if normalized in {"calc", "calculator", "计算器"}:
-            alias_candidates.update({"calculator", "calc", "计算器"})
-        elif normalized in {"settings", "设置"}:
-            alias_candidates.update({"settings", "设置"})
-        elif normalized in {"notepad", "记事本"}:
-            alias_candidates.update({"notepad", "记事本"})
-        elif normalized in {"explorer", "file explorer", "文件资源管理器"}:
-            alias_candidates.update({"explorer", "file explorer", "文件资源管理器"})
-        elif normalized in {"cmd", "command prompt", "命令提示符"}:
-            alias_candidates.update({"cmd", "command prompt", "命令提示符"})
-        elif normalized in {"powershell", "pwsh"}:
-            alias_candidates.update({"powershell", "pwsh"})
-        elif normalized in {"terminal", "windows terminal", "终端"}:
-            alias_candidates.update({"terminal", "windows terminal", "终端"})
+        for target in list(expected_targets):
+            for alias in alias_map.get(target, set()):
+                expected_targets.update(self._launch_name_variants(alias))
 
-        for window in windows:
-            window_name = (getattr(window, "name", None) or getattr(window, "window_title", None) or "").strip()
-            window_pid = getattr(window, "process_id", None)
-            window_name_lower = window_name.lower()
-            if pid and window_pid == pid:
-                return window_name or None, window_pid, "pid"
-            if any(token and token in window_name_lower for token in alias_candidates):
-                return window_name or None, window_pid, "name"
+        pid_candidates: set[int] = set()
+        for candidate_pid in ([pid] if pid else []) + list(known_pids or []):
+            pid_candidates.update(self._iter_related_pids(candidate_pid))
+
+        baseline_handles = baseline_handles or set()
+
+        for attempt in range(max(1, attempts)):
+            if attempt > 0:
+                sleep(delay_seconds)
+            try:
+                state = self.get_state(use_vision=False, as_bytes=False)
+            except Exception:
+                continue
+
+            windows = list(getattr(state, "windows", []) or [])
+            if windows:
+                ordered_windows = sorted(
+                    windows,
+                    key=lambda window: (
+                        0 if getattr(window, "handle", None) not in baseline_handles else 1,
+                        0 if getattr(window, "process_id", None) in pid_candidates else 1,
+                    ),
+                )
+                for window in ordered_windows:
+                    window_name = (getattr(window, "name", None) or getattr(window, "window_title", None) or "").strip()
+                    window_pid = getattr(window, "process_id", None)
+                    if pid_candidates and window_pid in pid_candidates:
+                        return window_name or None, window_pid, "pid"
+
+                    window_targets = self._launch_name_variants(window_name)
+                    if window_targets.intersection(expected_targets):
+                        return window_name or None, window_pid, "name"
+
+                    normalized_window = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", window_name.lower()).strip()
+                    window_words = normalized_window.split()
+                    if any(
+                        phrase and self._contains_phrase_tokens(window_words, phrase.split())
+                        for phrase in expected_targets
+                    ):
+                        return window_name or None, window_pid, "phrase"
+
+            for candidate_pid in pid_candidates:
+                process_targets, process_label = self._process_verification_signature(candidate_pid)
+                if process_targets.intersection(expected_targets):
+                    return process_label or str(candidate_pid), candidate_pid, "process"
+
         return None, None, "no_match"
 
     def launch_app(self, name: str) -> tuple[str, int, int]:
@@ -850,22 +991,33 @@ class Desktop:
         attempts: list[str] = []
         launch_results: list[str] = []
         directory_hits = self._scan_install_dirs_for_exe(name)
+        observed_pids: list[int] = []
+        try:
+            baseline_state = self.get_state(use_vision=False, as_bytes=False)
+            baseline_handles = {
+                getattr(window, "handle", None)
+                for window in list(getattr(baseline_state, "windows", []) or [])
+                if getattr(window, "handle", None) is not None
+            }
+        except Exception:
+            baseline_handles = set()
 
         def _verify_and_return(response: str, pid: int, attempt_label: str) -> tuple[str, int, int] | None:
-            launch_verification_name, launch_verification_pid, verification_source = self._find_launch_verification_window(name, pid=pid)
+            if pid > 0 and pid not in observed_pids:
+                observed_pids.append(pid)
+            launch_verification_name, launch_verification_pid, verification_source = self._find_launch_verification_window(
+                name,
+                pid=pid,
+                known_pids=observed_pids,
+                baseline_handles=baseline_handles,
+                attempts=4 if pid > 0 else 5,
+                delay_seconds=0.45,
+            )
             if launch_verification_name is not None:
                 detail = (
                     f"{response} [attempted={' ; '.join(attempts)}; verification={verification_source}:{launch_verification_name}]"
                 )
                 return (detail, 0, launch_verification_pid or pid)
-            # No PID or PID did not resolve yet, but a window may already be visible.
-            if pid == 0:
-                launch_verification_name, launch_verification_pid, verification_source = self._find_launch_verification_window(name, pid=0)
-                if launch_verification_name is not None:
-                    detail = (
-                        f"{response} [attempted={' ; '.join(attempts)}; verification={verification_source}:{launch_verification_name}]"
-                    )
-                    return (detail, 0, launch_verification_pid or 0)
             launch_results.append(f"unverified:{attempt_label}")
             return None
 
@@ -909,7 +1061,14 @@ class Desktop:
             attempts.append(f"failed:scan:{path}")
 
         # Final verification pass for cases where launch succeeded but pid was unavailable.
-        launch_verification_name, launch_verification_pid, verification_source = self._find_launch_verification_window(name, pid=0)
+        launch_verification_name, launch_verification_pid, verification_source = self._find_launch_verification_window(
+            name,
+            pid=0,
+            known_pids=observed_pids,
+            baseline_handles=baseline_handles,
+            attempts=6 if observed_pids else 5,
+            delay_seconds=0.5,
+        )
         if launch_verification_name is not None:
             detail = (
                 f"Launched {name} without PID confirmation, but window appeared. [attempted={' ; '.join(attempts)}; verification={verification_source}:{launch_verification_name}]"
