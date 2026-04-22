@@ -69,6 +69,26 @@ class _LaunchBackend:
         return self._state
 
 
+class _DelayedLaunchBackend(_LaunchBackend):
+    def __init__(self, detected_name: str) -> None:
+        super().__init__(detected_name=detected_name, pid=0)
+        self._reads = 0
+        self._before = self._state
+        launched = _LaunchWindow(self.detected_name)
+        self._after = _LaunchState(launched, windows=list(self._state.windows) + [launched])
+
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        self.calls.append(("launch_app", (name,), {}))
+        return (f"Launch returned pending for {name}. [verification=name:{self.detected_name}]", 1, 0)
+
+    def get_state(self, use_vision: bool = False, as_bytes: bool = False) -> _LaunchState:
+        self._reads += 1
+        if self._reads >= 3:
+            self._state = self._after
+            return self._after
+        return self._before
+
+
 def test_input_launch_app_tool_aligns_top_level_ok_on_success() -> None:
     server = create_server()
     server.services.executor = Executor(backend=_LaunchBackend("File Explorer"))
@@ -91,6 +111,19 @@ def test_input_launch_app_tool_aligns_top_level_ok_on_target_mismatch() -> None:
     assert result["message"] == "target mismatch:calc->C:\\Program Files\\Git\\usr\\bin\\mpicalc.exe"
     assert result["data"]["payload"]["verification_status"] == "target_mismatch"
     assert result["data"]["payload"]["result_code"] == "TARGET_MISMATCH"
+
+
+def test_input_launch_app_tool_recovers_top_level_ok_when_backend_pid_missing_but_window_verified() -> None:
+    server = create_server()
+    server.services.executor = Executor(backend=_DelayedLaunchBackend("微信"))
+
+    result = server.tool_registry.specs["input_launch_app"].executor(name="微信")
+
+    assert result["ok"] is True
+    assert result["data"]["ok"] is True
+    assert result["data"]["payload"]["verification_status"] == "success"
+    assert result["data"]["payload"]["result_code"] == "OK"
+    assert result["data"]["payload"]["detected_window_name"] == "微信"
 
 
 async def _mcp_smoke_chain() -> dict[str, object]:

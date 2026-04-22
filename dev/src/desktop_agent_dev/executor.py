@@ -109,9 +109,10 @@ class Executor:
         if path.suffix.lower() != ".lnk":
             return str(path)
         try:
+            escaped_path = str(path).replace("'", "''")
             script = (
                 "$shell = New-Object -ComObject WScript.Shell; "
-                f"$shortcut = $shell.CreateShortcut('{str(path).replace(\"'\", \"''\")}'); "
+                f"$shortcut = $shell.CreateShortcut('{escaped_path}'); "
                 "if ($shortcut.TargetPath) { Write-Output $shortcut.TargetPath }"
             )
             completed = subprocess.run(
