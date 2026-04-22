@@ -755,11 +755,62 @@ class Executor:
         raise ExecutorError("Backend does not expose resize_app().")
 
     def minimize_window(self, name: str | None = None) -> InputResult:
+        def _current_window_snapshot() -> dict[str, Any] | None:
+            backend = self._backend
+            if backend is None:
+                return None
+            try:
+                state = getattr(backend, "desktop_state", None)
+                if state is not None:
+                    window = getattr(state, "active_window", None) if name is None else None
+                    if window is None and name is not None:
+                        windows = list(getattr(state, "windows", []) or [])
+                        for candidate in windows:
+                            if getattr(candidate, "name", None) == name:
+                                window = candidate
+                                break
+                    if window is not None:
+                        return {
+                            "name": getattr(window, "name", None),
+                            "status": getattr(getattr(window, "status", None), "name", None) or getattr(window, "status", None),
+                            "handle": getattr(window, "handle", None),
+                        }
+                getter = getattr(backend, "get_state", None)
+                if callable(getter):
+                    state = getter(use_vision=False, as_bytes=False)
+                    window = getattr(state, "active_window", None) if name is None else None
+                    if window is None and name is not None:
+                        windows = list(getattr(state, "windows", []) or [])
+                        for candidate in windows:
+                            if getattr(candidate, "name", None) == name:
+                                window = candidate
+                                break
+                    if window is not None:
+                        return {
+                            "name": getattr(window, "name", None),
+                            "status": getattr(getattr(window, "status", None), "name", None) or getattr(window, "status", None),
+                            "handle": getattr(window, "handle", None),
+                        }
+            except Exception:
+                return None
+            return None
+
+        before = _current_window_snapshot()
         if self._backend is None:
-            return self._result("window_minimize", f"minimize:{name or 'active'}", tool="window_minimize")
+            return self._result("window_minimize", f"minimize:{name or 'active'}", payload={"target_window": name, "before_status": None, "after_status": None, "verified": False}, tool="window_minimize")
         if hasattr(self._backend, "minimize_app"):
             response = self._backend.minimize_app(name=name)
-            return self._result("window_minimize", str(response), tool="window_minimize")
+            after = _current_window_snapshot()
+            verified = bool(after and str(after.get("status", "")).lower().endswith("minimized"))
+            payload = {
+                "target_window": before.get("name") if before else name,
+                "before_status": before.get("status") if before else None,
+                "after_status": after.get("status") if after else None,
+                "verified": verified,
+                "before_window": before,
+                "after_window": after,
+            }
+            return self._result("window_minimize", str(response), payload=payload, tool="window_minimize")
         raise ExecutorError("Backend does not expose minimize_app().")
 
     def maximize_window(self, name: str | None = None) -> InputResult:
