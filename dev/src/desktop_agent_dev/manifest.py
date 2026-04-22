@@ -35,7 +35,7 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
     summary = "Windows desktop agent MCP server for observation, input, window control, and task orchestration."
     body = {
         "name": "desktop-agent-dev",
-        "version": "1.4",
+        "version": "1.5",
         "stage": "phase1",
         "tool_count": len(registry.specs),
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -61,7 +61,7 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
 def build_catalog(registry: ToolRegistry) -> dict[str, Any]:
     summary = "Grouped tool directory with metadata and examples."
     body = {
-        "version": "1.4",
+        "version": "1.5",
         "groups": registry.group_catalog(),
         "tools": registry.tool_catalog(),
         "examples": registry.examples(),

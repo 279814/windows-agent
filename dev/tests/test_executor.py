@@ -195,9 +195,9 @@ def test_executor_close_window_uses_backend_close_app_and_verifies_state_change(
     assert result.tool == "window_close"
     assert result.payload is not None
     assert result.payload["close_strategy"] == "backend.close_app"
-    assert result.payload["outcome"] in {"success", "success_wm_close_degraded"}
+    assert result.payload["outcome"] in {"execution_succeeded", "success_wm_close_degraded"}
     assert result.payload["post_close_verified"] is True
-    assert result.payload["backend_response"] == "close:main"
+    assert result.payload["backend_response"] == ("Closed main.", 0)
     assert result.payload["exit_code"] == 0
     assert result.detail
     assert backend.calls[-1][0] == "close_app"

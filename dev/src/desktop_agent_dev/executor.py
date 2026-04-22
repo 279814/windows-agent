@@ -499,37 +499,130 @@ class Executor:
                 return str(response[0]), response[1] if isinstance(response[1], int) else None
             return str(response), 0
 
+        def _window_record(window: Any) -> dict[str, Any] | None:
+            if window is None:
+                return None
+            if isinstance(window, dict):
+                return {
+                    "name": window.get("name") or window.get("window_title"),
+                    "handle": window.get("handle"),
+                    "status": window.get("status"),
+                    "window_title": window.get("window_title") or window.get("name"),
+                }
+            return {
+                "name": getattr(window, "name", None) or getattr(window, "window_title", None),
+                "handle": getattr(window, "handle", None),
+                "status": getattr(window, "status", None),
+                "window_title": getattr(window, "window_title", None) or getattr(window, "name", None),
+            }
+
         def _window_signature(state: Any) -> dict[str, Any] | None:
             if state is None:
                 return None
             active = getattr(state, "active_window", None)
-            if active is None:
-                return None
-            if isinstance(active, dict):
-                return {
-                    "name": active.get("name") or active.get("window_title"),
-                    "handle": active.get("handle"),
-                    "status": active.get("status"),
-                }
-            return {
-                "name": getattr(active, "name", None) or getattr(active, "window_title", None),
-                "handle": getattr(active, "handle", None),
-                "status": getattr(active, "status", None),
-            }
+            windows = getattr(state, "windows", None)
+            if windows is None and isinstance(state, dict):
+                active = state.get("active_window")
+                windows = state.get("windows")
+            window_list = []
+            if isinstance(windows, list):
+                for window in windows:
+                    record = _window_record(window)
+                    if record is not None:
+                        window_list.append(record)
+            return {"active_window": _window_record(active), "windows": window_list}
 
         def _capture_state() -> dict[str, Any] | None:
             getter = getattr(self._backend, "get_state", None)
             if not callable(getter):
                 return None
             try:
-                return _window_signature(getter(use_vision=False, as_bytes=False))
+                state = getter(use_vision=False, as_bytes=False)
             except TypeError:
                 try:
-                    return _window_signature(getter())
+                    state = getter()
                 except Exception:
                     return None
             except Exception:
                 return None
+            return _window_signature(state)
+
+        def _close_outcome(before: dict[str, Any] | None, after: dict[str, Any] | None, detail: str, exit_code: int | None, strategy: str, backend_response: Any, requested_close_path: str) -> InputResult:
+            before_active = before.get("active_window") if before else None
+            after_active = after.get("active_window") if after else None
+            before_name = before_active.get("name") if before_active else None
+            target_label = name
+
+            def _find_window(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+                if snapshot is None:
+                    return None
+                for window in snapshot.get("windows", []):
+                    if not isinstance(window, dict):
+                        continue
+                    candidate_name = window.get("name") or window.get("window_title")
+                    candidate_title = window.get("window_title") or candidate_name
+                    if candidate_name == target_label or candidate_title == target_label:
+                        return window
+                active_window = snapshot.get("active_window")
+                if isinstance(active_window, dict):
+                    candidate_name = active_window.get("name") or active_window.get("window_title")
+                    candidate_title = active_window.get("window_title") or candidate_name
+                    if candidate_name == target_label or candidate_title == target_label:
+                        return active_window
+                return None
+
+            before_target = _find_window(before)
+            after_target = _find_window(after)
+            before_handle = before_target.get("handle") if before_target else None
+            after_handle = after_target.get("handle") if after_target else None
+            before_present = before_target is not None
+            after_present = after_target is not None
+            gone = before_present and not after_present
+            changed = before_handle is not None and after_handle is not None and after_handle != before_handle
+            verified = gone or changed
+            normalized_detail = detail
+            normalized_exit_code = exit_code
+            normalized_backend_response = backend_response
+            outcome = "execution_failed"
+            ok = False
+
+            if verified:
+                ok = True
+                if strategy == "backend.close_app" and (exit_code not in (None, 0) or detail.lower().startswith(("failed", "error"))):
+                    outcome = "success_wm_close_degraded"
+                elif strategy == "backend.kill_process":
+                    outcome = "success_wm_close_degraded"
+                else:
+                    outcome = "execution_succeeded"
+                normalized_detail = f"Closed {target_label}."
+                normalized_exit_code = 0
+                normalized_backend_response = (normalized_detail, 0)
+            elif before_present:
+                outcome = "execution_failed"
+                normalized_exit_code = normalized_exit_code if normalized_exit_code not in (None, 0) else 1
+                if detail.lower().startswith(("failed", "error")):
+                    normalized_detail = detail
+                else:
+                    normalized_detail = f"Close verification failed for {target_label}."
+
+            return self._result(
+                "window_close",
+                normalized_detail,
+                ok=ok,
+                payload={
+                    "name": name,
+                    "target_window": target_label,
+                    "close_strategy": strategy,
+                    "requested_close_path": requested_close_path,
+                    "backend_response": normalized_backend_response,
+                    "exit_code": normalized_exit_code,
+                    "before_window": before,
+                    "after_window": after,
+                    "post_close_verified": verified,
+                    "outcome": outcome if ok or before_present else "capability_missing",
+                },
+                tool="window_close",
+            )
 
         if self._backend is None:
             return self._result(
@@ -540,106 +633,34 @@ class Executor:
                     "name": name,
                     "target_window": name,
                     "close_strategy": "capability_missing",
-                    "outcome": "capability_missing",
+                    "requested_close_path": "capability_missing",
                     "backend_response": None,
                     "exit_code": None,
+                    "before_window": None,
+                    "after_window": None,
                     "post_close_verified": False,
+                    "outcome": "capability_missing",
                 },
                 tool="window_close",
             )
 
         before = _capture_state()
-        before_handle = before.get("handle") if before else None
-        before_name = before.get("name") if before else None
-
         close_app = getattr(self._backend, "close_app", None)
         if callable(close_app):
             response = close_app(name)
             detail, exit_code = _normalize_backend_response(response)
             after = _capture_state()
-            after_handle = after.get("handle") if after else None
-            after_name = after.get("name") if after else None
-            closed = False
-            if before_handle is not None and after_handle is not None:
-                closed = after_handle != before_handle
-            elif before_handle is not None and after_handle is None:
-                closed = True
-            elif before_name is not None and after_name is not None:
-                closed = after_name != before_name or str(after.get("status") or "").lower() == "closed"
-            elif after is None:
-                closed = True
-
-            backend_failed = exit_code not in (None, 0) or detail.lower().startswith(("failed", "error"))
-            if backend_failed:
-                outcome = "execution_failed"
-                ok = False
-                backend_response = response
-                final_detail = detail
-            elif closed:
-                if before_handle is not None and after_handle is None:
-                    outcome = "success"
-                    final_detail = detail if detail and not detail.lower().startswith(("close:", "closed", "success")) else f"Closed {name}."
-                else:
-                    outcome = "success_wm_close_degraded"
-                    final_detail = detail if detail and not detail.lower().startswith(("close:",)) else f"Closed {name} (verified by state change)."
-                ok = True
-                backend_response = response
-                exit_code = 0 if exit_code in (None, 0) else exit_code
-            else:
-                outcome = "execution_failed"
-                ok = False
-                backend_response = response
-                final_detail = f"Close verification failed for {name}."
-                if exit_code in (None, 0):
-                    exit_code = 1
-            return self._result(
-                "window_close",
-                final_detail,
-                ok=ok,
-                payload={
-                    "name": name,
-                    "target_window": before_name or name,
-                    "close_strategy": "backend.close_app",
-                    "outcome": outcome,
-                    "backend_response": backend_response,
-                    "exit_code": exit_code,
-                    "before_window": before,
-                    "after_window": after,
-                    "post_close_verified": closed,
-                },
-                tool="window_close",
-            )
+            return _close_outcome(before, after, detail, exit_code, "backend.close_app", response, "wm_close")
 
         kill_process = getattr(self._backend, "kill_process", None)
         if callable(kill_process):
             response = kill_process(name=name, force=False)
             detail, exit_code = _normalize_backend_response(response)
             after = _capture_state()
-            after_handle = after.get("handle") if after else None
-            after_name = after.get("name") if after else None
-            closed = before_handle is not None and after_handle is None or (before_name is not None and after_name is not None and after_name != before_name)
-            outcome = "wm_close_degraded" if closed and exit_code in (None, 0) and not detail.lower().startswith(("failed", "error")) else "execution_failed"
-            ok = outcome == "wm_close_degraded"
-            if ok:
-                detail = detail if detail and not detail.lower().startswith(("close:",)) else f"Closed {name} after degraded close path."
-                exit_code = 0 if exit_code in (None, 0) else exit_code
-            return self._result(
-                "window_close",
-                detail,
-                ok=ok,
-                payload={
-                    "name": name,
-                    "target_window": before_name or name,
-                    "close_strategy": "backend.kill_process",
-                    "outcome": outcome,
-                    "backend_response": response,
-                    "exit_code": exit_code,
-                    "before_window": before,
-                    "after_window": after,
-                    "post_close_verified": closed,
-                },
-                tool="window_close",
-            )
+            result = _close_outcome(before, after, detail, exit_code, "backend.kill_process", response, "kill_process")
+            if result.payload is not None:
+                result.payload["outcome"] = "success_wm_close_degraded" if result.ok else result.payload.get("outcome", "execution_failed")
+            return result
 
         return self._result(
             "window_close",
@@ -649,12 +670,13 @@ class Executor:
                 "name": name,
                 "target_window": name,
                 "close_strategy": "capability_missing",
-                "outcome": "capability_missing",
+                "requested_close_path": "capability_missing",
                 "backend_response": None,
                 "exit_code": None,
                 "before_window": before,
                 "after_window": None,
                 "post_close_verified": False,
+                "outcome": "capability_missing",
             },
             tool="window_close",
         )
