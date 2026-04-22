@@ -89,6 +89,15 @@ class _DelayedLaunchBackend(_LaunchBackend):
         return self._before
 
 
+class _ProcessVerifiedLaunchBackend(_LaunchBackend):
+    def __init__(self, detected_name: str = "main") -> None:
+        super().__init__(detected_name=detected_name, pid=27236)
+
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        self.calls.append(("launch_app", (name,), {}))
+        return (f"Launched via start menu shortcut: steam (score=90). 27236\r\n [attempted=direct:{name}; verification=process:steam.exe]", 0, 27236)
+
+
 def test_input_launch_app_tool_aligns_top_level_ok_on_success() -> None:
     server = create_server()
     server.services.executor = Executor(backend=_LaunchBackend("File Explorer"))
@@ -124,6 +133,19 @@ def test_input_launch_app_tool_recovers_top_level_ok_when_backend_pid_missing_bu
     assert result["data"]["payload"]["verification_status"] == "success"
     assert result["data"]["payload"]["result_code"] == "OK"
     assert result["data"]["payload"]["detected_window_name"] == "微信"
+
+
+def test_input_launch_app_tool_accepts_backend_process_verification() -> None:
+    server = create_server()
+    server.services.executor = Executor(backend=_ProcessVerifiedLaunchBackend())
+
+    result = server.tool_registry.specs["input_launch_app"].executor(name="steam.exe - 快捷方式")
+
+    assert result["ok"] is True
+    assert result["data"]["ok"] is True
+    assert result["data"]["payload"]["verification_source"] == "process"
+    assert result["data"]["payload"]["verification_hint"] == "steam.exe"
+    assert result["data"]["payload"]["verification_status"] == "success"
 
 
 async def _mcp_smoke_chain() -> dict[str, object]:

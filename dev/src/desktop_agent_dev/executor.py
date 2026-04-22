@@ -689,12 +689,12 @@ class Executor:
                         return True
                 return False
 
-            def _extract_verification_hint(value: Any) -> str | None:
+            def _extract_verification_hint(value: Any) -> tuple[str | None, str | None]:
                 text = str(value or "")
-                match = re.search(r"verification=name:([^\]\r\n]+)", text, flags=re.IGNORECASE)
+                match = re.search(r"verification=(name|process|pid|phrase):([^\]\r\n]+)", text, flags=re.IGNORECASE)
                 if match:
-                    return match.group(1).strip()
-                return None
+                    return match.group(1).strip().lower(), match.group(2).strip()
+                return None, None
 
             before_state = None
             after_state = None
@@ -708,7 +708,7 @@ class Executor:
             status = response[1] if isinstance(response, tuple) and len(response) > 1 and isinstance(response[1], int) else None
             pid = response[2] if isinstance(response, tuple) and len(response) > 2 and isinstance(response[2], int) else None
             launched = status == 0 if status is not None else bool(response)
-            verification_hint = _extract_verification_hint(response_text)
+            verification_source, verification_hint = _extract_verification_hint(response_text)
             detected = False
             detected_name = None
             verification_attempts: list[dict[str, Any]] = []
@@ -734,6 +734,7 @@ class Executor:
                             "attempt": attempt + 1,
                             "window_count_increased": window_count_increased,
                             "detected_window_name": current_name,
+                            "verification_source": verification_source,
                             "target_matches": matched_this_attempt,
                         }
                     )
@@ -745,20 +746,22 @@ class Executor:
             except Exception:
                 after_state = None
 
-            target_matches = _matches_expected(detected_name) or _matches_expected(verification_hint)
+            backend_verification_matches = _matches_expected(verification_hint)
+            target_matches = _matches_expected(detected_name) or backend_verification_matches
             mismatch_signals = [
                 candidate
-                for candidate in (detected_name, verification_hint)
+                for candidate in (detected_name, None if backend_verification_matches else verification_hint)
                 if candidate is not None and str(candidate).strip() and not _matches_expected(candidate)
             ]
             backend_failed_but_verified = bool((status not in (None, 0) or not pid) and target_matches)
+            backend_verified_success = bool(launched and verification_source in {"process", "pid", "phrase", "name"} and backend_verification_matches)
             verification_evidence = bool(
                 target_matches
                 or detected
                 or (pid is not None and pid > 0)
                 or (response_text is not None and str(response_text).strip())
             )
-            verification_ok = bool((launched and target_matches) or backend_failed_but_verified)
+            verification_ok = bool(backend_verified_success or (launched and target_matches) or backend_failed_but_verified)
             mismatch_detected = bool(launched and not verification_ok and mismatch_signals)
             partial_ok = bool(launched and not verification_ok and not mismatch_detected and verification_evidence)
             verification_status = (
@@ -790,6 +793,7 @@ class Executor:
                 "after_window_count": len(after_state) if isinstance(after_state, list) else None,
                 "window_detected": detected,
                 "detected_window_name": detected_name,
+                "verification_source": verification_source,
                 "verification_hint": verification_hint,
                 "verification_attempts": verification_attempts,
                 "target_matches": target_matches,

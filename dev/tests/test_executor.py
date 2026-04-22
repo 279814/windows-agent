@@ -269,6 +269,12 @@ class FakeDelayedVerifiedLaunchBackend(FakeExecBackend):
         return self._before
 
 
+class FakeProcessVerifiedLaunchBackend(FakeExecBackend):
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        self.calls.append(("launch_app", (name,), {}))
+        return (f"Launched via start menu shortcut: steam (score=90). 27236\r\n [attempted=direct:{name}; verification=process:steam.exe]", 0, 27236)
+
+
 def test_executor_close_window_marks_backend_failure_as_not_ok() -> None:
     backend = FakeFailBackend()
     executor = Executor(backend=backend)
@@ -499,3 +505,21 @@ def test_executor_launch_app_matches_versioned_name_via_base_product_name(tmp_pa
     assert result.payload["effective_target"] == str(shortcut_path)
     assert result.payload["discovery"]["display_name"] == "PyCharm"
     assert backend.calls[-1][1] == (str(shortcut_path),)
+
+
+def test_executor_launch_app_accepts_backend_process_verification_even_if_active_window_differs() -> None:
+    backend = FakeProcessVerifiedLaunchBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("steam.exe - 快捷方式")
+
+    assert result.ok is True
+    assert result.detail == "launched:steam.exe - 快捷方式"
+    assert result.payload is not None
+    assert result.payload["status"] == 0
+    assert result.payload["pid"] == 27236
+    assert result.payload["verification_source"] == "process"
+    assert result.payload["verification_hint"] == "steam.exe"
+    assert result.payload["target_matches"] is True
+    assert result.payload["verification_status"] == "success"
+    assert result.payload["result_code"] == "OK"
