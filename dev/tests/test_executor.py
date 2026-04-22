@@ -226,3 +226,56 @@ def test_executor_close_window_marks_backend_failure_as_not_ok() -> None:
     assert result.payload["outcome"] == "execution_failed"
     assert result.payload["post_close_verified"] is False
     assert result.payload["exit_code"] == 1
+
+
+def test_executor_launch_app_returns_complete_result() -> None:
+    backend = FakeExecBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("calc")
+
+    assert result.action == "input_launch_app"
+    assert result.ok is True
+    assert result.detail == "launched:calc"
+    assert result.payload is not None
+    assert result.tool == "input_launch_app"
+    assert result.payload["name"] == "calc"
+    assert result.payload["requested_target"] == "calc"
+    assert result.payload["matched_target"] == "calc"
+    assert "backend_response" in result.payload
+    assert "window_detected" in result.payload
+    assert result.payload["verification_status"] in {"success", "partial"}
+
+
+def test_executor_launch_app_maps_explorer_alias_and_reports_verification() -> None:
+    backend = FakeExecBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("explorer")
+
+    assert result.ok is False
+    assert result.payload is not None
+    assert result.payload["requested_target"] == "explorer"
+    assert result.payload["matched_target"] == "explorer.exe"
+    assert result.payload["resolved_alias"] == "explorer.exe"
+    assert result.payload["verification_status"] == "target_mismatch"
+    assert result.payload["result_code"] == "TARGET_MISMATCH"
+    assert result.payload["warning"] is not None
+    assert backend.calls[-1][0] == "launch_app"
+    assert backend.calls[-1][1] == ("explorer.exe",)
+
+
+def test_executor_launch_app_rejects_inexact_calc_mismatch() -> None:
+    backend = FakeExecBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("calc")
+
+    assert result.ok is False
+    assert result.payload is not None
+    assert result.payload["requested_target"] == "calc"
+    assert result.payload["matched_target"] == "calc.exe"
+    assert result.payload["verification_status"] == "target_mismatch"
+    assert result.payload["result_code"] == "TARGET_MISMATCH"
+    assert result.payload["warning"] is not None
+    assert backend.calls[-1][1] == ("calc.exe",)

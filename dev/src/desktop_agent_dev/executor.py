@@ -447,6 +447,20 @@ class Executor:
             return self._result("input_launch_app", f"launch:{name}", tool="input_launch_app")
 
         if hasattr(self._backend, "launch_app"):
+            alias_map = {
+                "explorer": ["explorer.exe"],
+                "file explorer": ["explorer.exe"],
+                "calc": ["calc.exe"],
+                "calculator": ["calc.exe"],
+                "notepad": ["notepad.exe"],
+                "mspaint": ["mspaint.exe"],
+                "paint": ["mspaint.exe"],
+            }
+            requested_target = name.strip()
+            normalized_key = requested_target.lower()
+            matched_target = alias_map.get(normalized_key, [requested_target])[0]
+            resolved_alias = matched_target if matched_target != requested_target else None
+
             before_state = None
             after_state = None
             try:
@@ -455,12 +469,13 @@ class Executor:
             except Exception:
                 before_state = None
 
-            response = self._backend.launch_app(name)
+            response = self._backend.launch_app(matched_target)
             response_text = response[0] if isinstance(response, tuple) and response else response
             status = response[1] if isinstance(response, tuple) and len(response) > 1 and isinstance(response[1], int) else None
             pid = response[2] if isinstance(response, tuple) and len(response) > 2 and isinstance(response[2], int) else None
             launched = status == 0
             detected = False
+            detected_name = None
             try:
                 state_after = self._backend.get_state(use_vision=False, as_bytes=False)
                 after_state = getattr(state_after, "windows", None)
@@ -471,25 +486,38 @@ class Executor:
                 active_after = getattr(state_after, "active_window", None)
                 if isinstance(active_after, dict):
                     current_name = active_after.get("name") or active_after.get("window_title")
-                    detected = detected or (current_name is not None and name.lower() in str(current_name).lower())
+                    detected_name = current_name
+                    detected = detected and current_name is not None and str(current_name).lower().find(matched_target.lower()) >= 0
                 elif active_after is not None:
                     current_name = getattr(active_after, "name", None) or getattr(active_after, "window_title", None)
-                    detected = detected or (current_name is not None and name.lower() in str(current_name).lower())
+                    detected_name = current_name
+                    detected = detected and current_name is not None and str(current_name).lower().find(matched_target.lower()) >= 0
             except Exception:
                 after_state = None
 
-            ok_flag = bool(launched and (detected or pid is not None or response_text))
-            detail = f"launched:{name}" if ok_flag else f"launch failed:{name}"
+            target_matches = detected_name is not None and str(detected_name).lower().find(matched_target.lower()) >= 0
+            verification_ok = bool(launched and detected and target_matches)
+            verification_status = "success" if verification_ok else ("failed" if not launched else "target_mismatch")
+            result_code = "OK" if verification_ok else ("LAUNCH_FAILED" if not launched else "TARGET_MISMATCH")
+            detail = f"launched:{name}" if verification_ok else (f"launch failed:{name}" if not launched else f"target mismatch:{name}->{detected_name}")
             payload = {
                 "name": name,
+                "requested_target": requested_target,
+                "matched_target": matched_target,
+                "resolved_alias": resolved_alias,
                 "backend_response": response,
                 "status": status,
                 "pid": pid,
                 "before_window_count": len(before_state) if isinstance(before_state, list) else None,
                 "after_window_count": len(after_state) if isinstance(after_state, list) else None,
                 "window_detected": detected,
+                "detected_window_name": detected_name,
+                "target_matches": target_matches,
+                "verification_status": verification_status,
+                "result_code": result_code,
+                "warning": None if verification_ok else "launch outcome could not be verified against the requested target",
             }
-            return InputResult(ok=ok_flag, detail=detail, payload=payload, tool="input_launch_app")
+            return self._result("input_launch_app", detail, ok=verification_ok, payload=payload, tool="input_launch_app")
 
         raise ExecutorError("Backend does not expose launch_app().")
 
