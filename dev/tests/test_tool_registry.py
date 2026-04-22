@@ -22,7 +22,7 @@ def test_registry_contains_desktop_metadata() -> None:
     server = create_server()
     spec = server.tool_registry.specs["desktop_snapshot"]
 
-    assert spec.description
+    assert spec.description.startswith("Capture the current desktop state")
     assert spec.param_description
     assert spec.result_description
     assert spec.input_examples == [{"with_screenshot": False}, {"with_screenshot": True}]

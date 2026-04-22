@@ -3,6 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
+
+DOC_SECTIONS = ("Best for", "Not recommended for", "Warning", "Common mistakes", "Prompt Example", "Usage Example", "Returns", "Parameters", "Safety", "Implementation")
+
+
+def format_tool_doc(*, summary: str, best_for: str, not_recommended_for: str, warning: str, common_mistakes: list[str], prompt_example: str, usage_example: Any, returns: str, parameters: str, safety: str = "", implementation: str = "") -> str:
+    parts = [summary, "", f"Best for: {best_for}", f"Not recommended for: {not_recommended_for}", f"Warning: {warning}", "Common mistakes:"]
+    parts.extend([f"- {item}" for item in common_mistakes])
+    parts.extend(["", f"Prompt Example: {prompt_example}", "Usage Example:", f"{usage_example}", "", f"Returns: {returns}", f"Parameters: {parameters}"])
+    if safety:
+        parts.extend([f"Safety: {safety}"])
+    if implementation:
+        parts.extend([f"Implementation: {implementation}"])
+    return "\n".join(parts)
+
 ToolKind = Literal["snapshot", "input", "window", "task"]
 
 TOOL_GROUP_TITLES = {
@@ -173,7 +187,23 @@ def register_tool_specs(server: Any) -> ToolRegistry:
     register_vision_tools(registry, server.services)
 
     for spec in registry.specs.values():
-        spec.executor.__doc__ = spec.description or spec.name.replace("_", " ")
+        doc_lines = [spec.description or spec.name.replace("_", " ")]
+        if spec.param_description:
+            doc_lines.extend(["", "Args:", f"    {spec.param_description}"])
+        if spec.result_description:
+            doc_lines.extend(["", "Returns:", f"    {spec.result_description}"])
+        if spec.safety_notes:
+            doc_lines.extend(["", "Safety:", f"    {spec.safety_notes}"])
+        if spec.implementation_notes:
+            doc_lines.extend(["", "Implementation:", f"    {spec.implementation_notes}"])
+        if spec.input_examples:
+            doc_lines.extend(["", "Examples:"])
+            for index, example in enumerate(spec.input_examples[:2], start=1):
+                output = spec.output_examples[index - 1] if spec.output_examples and index <= len(spec.output_examples) else None
+                doc_lines.append(f"    {index}. Input: {example}")
+                if output is not None:
+                    doc_lines.append(f"       Output: {output}")
+        spec.executor.__doc__ = "\n".join(doc_lines)
         spec.executor.__name__ = spec.name
         server.mcp.tool()(spec.executor)
 

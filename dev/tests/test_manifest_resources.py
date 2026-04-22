@@ -17,11 +17,13 @@ def test_readme_catalog_capabilities_security_resources_exist() -> None:
     server = create_server()
 
     assert server.readme["title"] == "Desktop Agent Dev Workspace"
+    assert server.readme["sections"][0]["heading"] == "Purpose"
     assert server.catalog["title"] == "Desktop Agent Tool Catalog"
+    assert server.catalog["sections"][1]["heading"] == "Content"
     assert server.capabilities["title"] == "Desktop Agent Capabilities"
     assert server.security["title"] == "Desktop Agent Security"
-    assert len(server.catalog["groups"]) >= 1
-    assert len(server.catalog["tools"]) == len(server.tool_registry.specs)
+    assert len(server.catalog["content"]["groups"]) >= 1
+    assert len(server.catalog["content"]["tools"]) == len(server.tool_registry.specs)
 
 
 def test_tool_handbook_has_formal_directory_sections() -> None:
@@ -29,8 +31,8 @@ def test_tool_handbook_has_formal_directory_sections() -> None:
     handbook = server.tool_handbook
 
     assert handbook["title"] == "Desktop Agent Tool Handbook"
-    section_titles = [section["title"] for section in handbook["sections"]]
-    assert section_titles == ["README", "Catalog", "Capabilities", "Security"]
+    section_headings = [section["heading"] for section in handbook["sections"]]
+    assert section_headings == ["Overview", "Tool Catalog", "Capabilities", "Security"]
 
 
 # def test_server_registers_resources_when_supported() -> None:

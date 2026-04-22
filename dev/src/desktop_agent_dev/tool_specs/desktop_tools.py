@@ -66,12 +66,20 @@ def register_desktop_tools(registry: ToolRegistry, services: Any) -> None:
             result_schema=DESKTOP_RESULT,
             permission=None,
             executor=desktop_snapshot,
-            description="读取桌面窗口状态、UIA 树与可选截图元数据。用于观察当前活动窗口、窗口列表、光标位置和快照上下文，是执行动作前的默认第一步。",
-            param_description="with_screenshot: 是否在快照中附加截图（默认 false）。",
-            result_description="返回活动窗口、窗口列表、光标位置、树节点和快照元数据；若启用截图则附带 screenshot 相关信息。",
+            description=(
+                "Capture the current desktop state, including the active window, open windows, cursor position, UIA tree, and optional screenshot metadata. "
+                "Best for observe-first workflows, pre-action verification, and understanding the current surface before any input or window change.\n\n"
+                "Parameters: with_screenshot controls whether a screenshot is attached to the snapshot.\n"
+                "Returns: a normalized observation payload containing active_window, windows, cursor, tree_nodes, and metadata.\n"
+                "Safety: read-only; performs no desktop side effects.\n"
+                "Implementation: aggregates window, tree, and optional screenshot data through the perception layer.\n"
+                "Examples: {\"with_screenshot\": false}, {\"with_screenshot\": true}."
+            ),
+            param_description="with_screenshot: attach a screenshot to the snapshot payload when true.",
+            result_description="Returns a normalized observation payload with active_window, windows, cursor, tree_nodes, and metadata.",
             input_examples=DESKTOP_EXAMPLES,
             output_examples=[{"ok": True, "tool": "desktop_snapshot", "message": "ok", "data": {"active_window": None, "windows": [], "cursor": [0, 0], "tree_nodes": [], "metadata": {}}}],
-            safety_notes="只读，不执行桌面副作用。",
-            implementation_notes="通过 perception 层聚合窗口、树节点与可选截图。",
+            safety_notes="Read-only; performs no desktop side effects.",
+            implementation_notes="Aggregates window, tree, and optional screenshot data through the perception layer.",
         )
     )
