@@ -165,6 +165,7 @@ RESULT_SCHEMAS: dict[str, dict[str, Any]] = {
             "action": {"type": "string"},
             "ok": {"type": "boolean"},
             "detail": {"type": "string"},
+            "validation": {"type": "object"},
             "payload": {"type": "object"},
         },
         "required": ["action", "ok", "detail", "payload"],

@@ -247,6 +247,37 @@ class Executor:
 
         raise ExecutorError("Backend does not expose move().")
 
+    def type_text(
+        self,
+        text: str,
+        *,
+        press_enter: bool = False,
+        clear: bool = False,
+        caret_position: str = "idle",
+    ) -> InputResult:
+        if self._backend is None:
+            payload = {"text": text, "press_enter": press_enter, "clear": clear, "caret_position": caret_position}
+            return self._result("type", f"typed:{text}", payload=payload, tool="input_type")
+
+        if hasattr(self._backend, "type"):
+            focused_before = None
+            type_loc = (0, 0)
+            try:
+                state = self._backend.get_state(use_vision=False, as_bytes=False)
+                focused_before = getattr(state, "focused_control", None)
+                if focused_before:
+                    bounds = focused_before.get("bounds") if isinstance(focused_before, dict) else None
+                    if bounds and len(bounds) == 4:
+                        left, top, right, bottom = bounds
+                        type_loc = (int((left + right) / 2), int((top + bottom) / 2))
+            except Exception:
+                focused_before = None
+            self._backend.type(type_loc, text=text, clear=clear, press_enter=press_enter, caret_position=caret_position)
+            payload = {"text": text, "press_enter": press_enter, "clear": clear, "caret_position": caret_position, "focused_before": focused_before, "type_location": {"x": type_loc[0], "y": type_loc[1]}}
+            return self._result("type", f"typed:{text}", payload=payload, tool="input_type")
+
+        raise ExecutorError("Backend does not expose type().")
+
     def drag(self, start: tuple[int, int], end: tuple[int, int]) -> InputResult:
         if self._backend is None:
             return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", tool="input_drag")
