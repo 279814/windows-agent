@@ -5,12 +5,13 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .backend_windows_mcp import build_backend_bundle
+from .backend_windows_mcp import BackendLoadError, build_backend_bundle
 from .executor import Executor
 from .manifest import build_capabilities, build_catalog, build_manifest, build_readme, build_security, build_tool_handbook
 from .perception import Perception
 from .planner import Planner
 from .safety import SafetyGate
+from .state import TaskStore
 from .tool_registry import register_tool_specs
 
 
@@ -20,6 +21,7 @@ class AppServices:
     executor: Executor
     planner: Planner
     safety: SafetyGate
+    task_store: TaskStore | None = None
 
 
 class DesktopMCPServer:
@@ -27,13 +29,17 @@ class DesktopMCPServer:
         self._windows_mcp_root = Path(windows_mcp_root) if windows_mcp_root else None
         self._backend_bundle = None
         if self._windows_mcp_root is not None:
-            self._backend_bundle = build_backend_bundle(self._windows_mcp_root)
+            try:
+                self._backend_bundle = build_backend_bundle(self._windows_mcp_root)
+            except BackendLoadError:
+                self._backend_bundle = None
         backend = self._backend_bundle.desktop if self._backend_bundle else None
         self.services = AppServices(
             perception=Perception(backend=backend),
             executor=Executor(backend=backend),
             planner=Planner(),
             safety=SafetyGate(),
+            task_store=TaskStore(),
         )
         self.mcp = FastMCP("desktop-agent-dev")
         register_tool_specs(self)

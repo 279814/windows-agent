@@ -37,13 +37,7 @@ class ToolResponse:
     error: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"ok": self.ok, "tool": self.tool}
-        if self.message is not None:
-            payload["message"] = self.message
-        if self.data is not None:
-            payload["data"] = self.data
-        if self.error is not None:
-            payload["error"] = self.error
+        payload: dict[str, Any] = {"ok": self.ok, "tool": self.tool, "message": self.message, "data": self.data, "error": self.error}
         return payload
 
 

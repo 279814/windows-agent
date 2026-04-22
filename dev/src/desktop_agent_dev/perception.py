@@ -20,6 +20,7 @@ class TreeNodeInfo:
     name: str
     control_type: str
     bounds: tuple[int, int, int, int] | None = None
+    automation_id: str | None = None
     source: str = "stub"
 
 
@@ -28,6 +29,7 @@ class DesktopSnapshot:
     active_window: WindowInfo | None = None
     windows: list[WindowInfo] = field(default_factory=list)
     screenshot: bytes | None = None
+    screenshot_path: str | None = None
     cursor: tuple[int, int] | None = None
     tree_nodes: list[TreeNodeInfo] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -100,6 +102,7 @@ class Perception:
                     name=getattr(node, "name", ""),
                     control_type=getattr(node, "control_type", ""),
                     bounds=bounds,
+                    automation_id=getattr(node, "automation_id", None),
                     source="windows-mcp",
                 )
             )
@@ -108,22 +111,44 @@ class Perception:
     @staticmethod
     def _from_backend_state(state: Any) -> DesktopSnapshot:
         windows = []
-        for window in getattr(state, "windows", []) or []:
-            windows.append(Perception._from_backend_window(window))
+        seen: set[tuple[int | None, str]] = set()
+
+        def add_window(window: Any) -> None:
+            info = Perception._from_backend_window(window)
+            key = (info.handle, info.name)
+            if key in seen:
+                return
+            seen.add(key)
+            windows.append(info)
+
+        for attr_name in ("windows", "visible_windows", "all_windows", "context_windows"):
+            for window in getattr(state, attr_name, []) or []:
+                add_window(window)
 
         active_window = getattr(state, "active_window", None)
+        if active_window is not None:
+            add_window(active_window)
+
         tree_state = getattr(state, "tree_state", None)
         cursor = getattr(state, "cursor_position", None)
         screenshot = getattr(state, "screenshot", None)
         if isinstance(screenshot, str):
             screenshot = screenshot.encode("utf-8")
+        screenshot_path = getattr(state, "screenshot_path", None)
+        metadata = {"source": "windows-mcp"}
+        if screenshot_path is not None:
+            metadata["screenshot_path"] = screenshot_path
+        if screenshot is not None:
+            metadata["has_screenshot"] = True
+            metadata["screenshot_bytes"] = len(screenshot)
         return DesktopSnapshot(
             active_window=Perception._from_backend_window(active_window)
             if active_window is not None
             else None,
             windows=windows,
             screenshot=screenshot,
+            screenshot_path=screenshot_path,
             cursor=cursor,
             tree_nodes=Perception._from_backend_tree_state(tree_state) if tree_state else [],
-            metadata={"source": "windows-mcp"},
+            metadata=metadata,
         )

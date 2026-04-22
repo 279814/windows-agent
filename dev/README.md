@@ -4,6 +4,8 @@ This `dev/` workspace is the isolated development area for the Windows-compatibl
 
 ## Global Development Rule
 
+`dev/` 文件夹才是本次开发的主文件夹。`Windows-MCP-main` 只是部分后端能力的参考实现；如果 `dev/` 里面需要更强大、更健壮、更高效、更创新的功能，应优先在 `dev/` 中直接实现，而不是回退到主源码仓库。
+
 本项目采用模块化开发，先明确具体架构、技术实现和每个模块在架构中的位置和作用，再进行单个模块开发。模块之间尽量解耦。注意每个小模块开发完成后，都要进行实际测试，确保正常运行，防止项目后期崩溃。
 
 ## Development Stages

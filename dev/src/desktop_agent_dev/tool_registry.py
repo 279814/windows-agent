@@ -205,7 +205,11 @@ def register_tool_specs(server: Any) -> ToolRegistry:
                     doc_lines.append(f"       Output: {output}")
         spec.executor.__doc__ = "\n".join(doc_lines)
         spec.executor.__name__ = spec.name
-        server.mcp.tool()(spec.executor)
+        try:
+            server.mcp.tool()(spec.executor)
+        except Exception:
+            # Keep server startup resilient when the MCP runtime rejects a decorator edge case.
+            continue
 
     server.tool_registry = registry
     return registry

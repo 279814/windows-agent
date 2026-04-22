@@ -26,13 +26,73 @@ class Executor:
     def _result(self, action: str, detail: str, ok: bool = True, payload: dict[str, Any] | None = None, tool: str | None = None) -> InputResult:
         return InputResult(action=action, ok=ok, detail=detail, payload=payload, tool=tool or action)
 
+    def _hit_test_element(self, x: int, y: int) -> dict[str, Any]:
+        backend = self._backend
+        if backend is None:
+            return {"type": "unknown", "name": None, "found": False, "confidence": 0.0}
+
+        candidates: list[dict[str, Any]] = []
+        tree_state = getattr(backend, "get_tree_state", None)
+        if callable(tree_state):
+            try:
+                state = tree_state()
+            except Exception:
+                state = None
+            if state is not None:
+                for node in getattr(state, "interactive_nodes", []) or []:
+                    box = getattr(node, "bounding_box", None)
+                    if box is None:
+                        continue
+                    left, top, right, bottom = box.left, box.top, box.right, box.bottom
+                    if left <= x <= right and top <= y <= bottom:
+                        candidates.append({
+                            "type": getattr(node, "control_type", "unknown") or "unknown",
+                            "name": getattr(node, "name", None),
+                            "automation_id": getattr(node, "automation_id", None),
+                            "found": True,
+                            "confidence": 0.9,
+                        })
+                if candidates:
+                    return candidates[0]
+
+        snapshot = getattr(backend, "get_state", None)
+        if callable(snapshot):
+            try:
+                state = snapshot(use_vision=False, as_bytes=False)
+            except TypeError:
+                try:
+                    state = snapshot()
+                except Exception:
+                    state = None
+            except Exception:
+                state = None
+            if state is not None:
+                tree_state_obj = getattr(state, "tree_state", None)
+                for node in getattr(tree_state_obj, "interactive_nodes", []) or []:
+                    box = getattr(node, "bounding_box", None)
+                    if box is None:
+                        continue
+                    left, top, right, bottom = box.left, box.top, box.right, box.bottom
+                    if left <= x <= right and top <= y <= bottom:
+                        return {
+                            "type": getattr(node, "control_type", "unknown") or "unknown",
+                            "name": getattr(node, "name", None),
+                            "automation_id": getattr(node, "automation_id", None),
+                            "found": True,
+                            "confidence": 0.8,
+                        }
+
+        return {"type": "unknown", "name": None, "found": False, "confidence": 0.0}
+
     def click(self, x: int, y: int, button: str = "left", clicks: int = 1) -> InputResult:
+        element = self._hit_test_element(x, y)
+        payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element}
         if self._backend is None:
-            return self._result("click", f"clicked:{x},{y}:{button}:{clicks}", tool="input_click")
+            return self._result("click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
 
         if hasattr(self._backend, "click"):
             self._backend.click((x, y), button=button, clicks=clicks)
-            return self._result("click", f"clicked:{x},{y}:{button}:{clicks}", tool="input_click")
+            return self._result("click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
 
         raise ExecutorError("Backend does not expose click().")
 

@@ -5,6 +5,7 @@ src/desktop_agent_dev/__init__.py
 src/desktop_agent_dev/__main__.py
 src/desktop_agent_dev/backend_windows_mcp.py
 src/desktop_agent_dev/executor.py
+src/desktop_agent_dev/manifest.py
 src/desktop_agent_dev/mcp_server.py
 src/desktop_agent_dev/perception.py
 src/desktop_agent_dev/planner.py
@@ -26,6 +27,7 @@ src/desktop_agent_dev/tool_specs/vision_tools.py
 src/desktop_agent_dev/tool_specs/window_tools.py
 tests/test_backend_loader.py
 tests/test_executor.py
+tests/test_manifest_resources.py
 tests/test_mcp_server.py
 tests/test_perception.py
 tests/test_phase1_runner.py
