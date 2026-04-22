@@ -15,8 +15,53 @@ INPUT_EXAMPLES = {
     "input_multi_edit": [{"edits": [{"x": 1, "y": 2, "text": "a"}, {"x": 3, "y": 4, "text": "b"}]}],
     "input_shortcut": [{"keys": "ctrl+s"}],
     "input_scroll": [{"direction": "down"}],
-    "input_launch_app": [{"name": "calc"}],
+    "input_launch_app": [{"name": "calc"}, {"name": "微信"}, {"name": "PyCharm 2024.1"}, {"name": "steam.exe - 快捷方式"}],
 }
+
+INPUT_LAUNCH_APP_OUTPUT_EXAMPLES = [
+    {
+        "ok": True,
+        "tool": "input_launch_app",
+        "message": "ok",
+        "data": {
+            "action": "input_launch_app",
+            "ok": True,
+            "detail": "Launched PyCharm 2024.1.",
+            "payload": {
+                "name": "PyCharm 2024.1",
+                "resolved_target_path": r"C:\Program Files\JetBrains\PyCharm 2024.1\bin\pycharm64.exe",
+                "verification_source": "process:pycharm64.exe",
+                "verification_hint": "pycharm64.exe",
+                "detected_window_name": "Welcome to PyCharm",
+                "attempts": 3,
+                "launch_method": "desktop-shortcut",
+                "verification_status": "verified",
+            },
+        },
+        "error": None,
+    },
+    {
+        "ok": False,
+        "tool": "input_launch_app",
+        "message": "Launch verification failed for calc.",
+        "data": {
+            "action": "input_launch_app",
+            "ok": False,
+            "detail": "Launch verification failed for calc.",
+            "payload": {
+                "name": "calc",
+                "resolved_target_path": r"C:\Users\lenovo\Desktop\mpicalc.exe - 快捷方式.lnk",
+                "verification_source": None,
+                "verification_hint": "mpicalc.exe",
+                "detected_window_name": "MPI Calc",
+                "attempts": 4,
+                "verification_status": "TARGET_MISMATCH",
+                "error_code": "TARGET_MISMATCH",
+            },
+        },
+        "error": None,
+    },
+]
 
 
 def register_input_tools(registry: ToolRegistry, services: Any) -> None:
@@ -138,4 +183,4 @@ def register_input_tools(registry: ToolRegistry, services: Any) -> None:
     registry.register(ToolSpec(name="input_multi_edit", kind="input", params_schema={"type": "object", "properties": {"edits": {"type": "array"}}, "required": ["edits"]}, result_schema=RESULT_SCHEMAS["input"], permission="multi_edit", executor=input_multi_edit, description="Write text into multiple targets in one pass. Use this for form filling and repeated field edits.\n\nParameters: edits is an array of {x, y, text} entries.\nReturns: standard input envelope with the multi-edit result.\nSafety: only use on forms or editors that can accept bulk input safely.\nExamples: {\"edits\": [{\"x\": 1, \"y\": 2, \"text\": \"a\"}, {\"x\": 3, \"y\": 4, \"text\": \"b\"}]}.", param_description="edits: array of {x, y, text} write targets.", result_description="Standard input envelope with the multi-edit result.", input_examples=INPUT_EXAMPLES.get("input_multi_edit", []), output_examples=[], safety_notes="Only use on forms or editors that can accept bulk input safely.", implementation_notes="Normalizes the edit tuples before dispatching them to the executor.") )
     registry.register(ToolSpec(name="input_shortcut", kind="input", params_schema={"type": "object", "properties": {"keys": {"type": "string"}}, "required": ["keys"]}, result_schema=RESULT_SCHEMAS["input"], permission="shortcut", executor=input_shortcut, description="Send a keyboard shortcut such as Ctrl+S, Alt+Tab, or Win+R. Use this when the active window is already the intended target.\n\nParameters: keys is the shortcut string using plus-separated modifiers and keys.\nReturns: standard input envelope with the shortcut result. The payload makes the execution context observable, including the target window or foreground focus before and after the shortcut, whether focus moved to a different window or remained on the same one, and the backend injection result object returned by the executor.\nSafety: confirm the foreground window before sending the shortcut.\nBehavior note: use this as part of an observe -> shortcut -> observe loop, because the focus can legitimately move and should be verified against the intended target.\nExamples: {\"keys\": \"ctrl+s\"}.", param_description="keys: plus-separated modifier and key combination.", result_description="Standard input envelope with the shortcut result. Payload should include target window / focus movement / injection outcome details so clients can verify the shortcut landed in the expected context.", input_examples=INPUT_EXAMPLES.get("input_shortcut", []), output_examples=[{"ok": True, "tool": "input_shortcut", "message": "ok", "data": {"action": "input_shortcut", "ok": True, "detail": "shortcut:esc", "payload": {"keys": "esc", "target_window": "Search", "focus_before": "Search", "focus_after": "Codex", "focus_changed": True, "injection_result": {"status": "sent", "method": "SendInput", "scan_code": False}}}}], safety_notes="Confirm the foreground window before sending the shortcut.", implementation_notes="Delegates to the executor shortcut path.") )
     registry.register(ToolSpec(name="input_scroll", kind="input", params_schema={"type": "object", "properties": {"direction": {"type": "string"}, "amount": {"type": "integer", "default": 1}}, "required": ["direction"]}, result_schema=RESULT_SCHEMAS["input"], permission="scroll", executor=input_scroll, description="Scroll the current surface or target region. Use this to page through content or reveal hidden UI.\n\nParameters: direction chooses up, down, left, or right; amount sets the number of scroll steps.\nReturns: standard input envelope with the scroll result.\nSafety: nested scroll containers may absorb the action instead of the viewport.\nExamples: {\"direction\": \"down\"}.", param_description="direction: up/down/left/right; amount: scroll step count.", result_description="Standard input envelope with the scroll result.", input_examples=INPUT_EXAMPLES.get("input_scroll", []), output_examples=[], safety_notes="Nested scroll containers may absorb the action instead of the viewport.", implementation_notes="Delegates to the executor scroll path.") )
-    registry.register(ToolSpec(name="input_launch_app", kind="input", params_schema={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}, result_schema=RESULT_SCHEMAS["input"], permission="launch_app", executor=input_launch_app, description="Launch an application. Use this when the workflow starts from a named desktop app.\n\nParameters: name is the application name or fuzzy match target.\nReturns: standard input envelope with the launch result.\nSafety: may start external applications; the safety gate should approve the action first.\nExamples: {\"name\": \"calc\"}.", param_description="name: application name or fuzzy match target.", result_description="Standard input envelope with the launch result.", input_examples=INPUT_EXAMPLES.get("input_launch_app", []), output_examples=[], safety_notes="May start external applications; the safety gate should approve the action first.", implementation_notes="Delegates to the executor launch path.") )
+    registry.register(ToolSpec(name="input_launch_app", kind="input", params_schema={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}, result_schema=RESULT_SCHEMAS["input"], permission="launch_app", executor=input_launch_app, description="Launch an application from a user-facing app name, executable name, desktop shortcut name, or versioned product label. Use this when the workflow starts from a desktop or third-party app rather than an already focused window.\n\nParameters: name is the requested app label. It may be a system alias such as calc, a localized app name such as 微信, a versioned product name such as PyCharm 2024.1, or a noisy shortcut label such as steam.exe - 快捷方式.\nReturns: standard input envelope with the launch result. The payload may include the resolved target path, desktop shortcut discovery details, verification source, verification hint, detected window name, and verification attempts.\nSafety: may start external applications; the safety gate should approve the action first.\nBehavior note: the launcher normalizes shortcut noise, prefers verified desktop shortcuts and executable paths for third-party apps, and accepts process-based verification when the launched app does not immediately become the foreground window.\nExamples: {\"name\": \"calc\"}, {\"name\": \"微信\"}, {\"name\": \"PyCharm 2024.1\"}, {\"name\": \"steam.exe - 快捷方式\"}.", param_description="name: requested app label, executable-style name, desktop shortcut name, localized app name, or versioned product name.", result_description="Standard input envelope with the launch result. Payload may include the resolved launch target, discovery metadata for desktop shortcuts, process/window verification signals, and final verification status.", input_examples=INPUT_EXAMPLES.get("input_launch_app", []), output_examples=INPUT_LAUNCH_APP_OUTPUT_EXAMPLES, safety_notes="May start external applications; the safety gate should approve the action first.", implementation_notes="Delegates to the executor launch path, which performs alias normalization, desktop shortcut discovery, and process/window-based post-launch verification.") )
