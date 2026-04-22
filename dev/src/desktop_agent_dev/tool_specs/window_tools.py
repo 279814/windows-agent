@@ -11,49 +11,65 @@ def register_window_tools(registry: ToolRegistry, services: Any) -> None:
         if not services.safety.check("window_launch"):
             return error("window_launch", "blocked by safety gate")
         result = services.executor.launch_app(name)
-        return ok("window_launch", input_payload(result.tool or "window_launch", result.ok, result.detail, result.payload))
+        response = ok("window_launch", input_payload(result.tool or "window_launch", result.ok, result.detail, result.payload))
+        response["ok"] = result.ok
+        return response
 
     def window_switch(name: str) -> dict[str, Any]:
         if not services.safety.check("window_switch"):
             return error("window_switch", "blocked by safety gate")
         result = services.executor.switch_window(name)
-        return ok("window_switch", input_payload(result.tool or "window_switch", result.ok, result.detail, result.payload))
+        response = ok("window_switch", input_payload(result.tool or "window_switch", result.ok, result.detail, result.payload))
+        response["ok"] = result.ok
+        return response
 
     def window_focus(name: str) -> dict[str, Any]:
         if not services.safety.check("window_focus"):
             return error("window_focus", "blocked by safety gate")
         result = services.executor.focus_window(name)
-        return ok("window_focus", input_payload(result.tool or "window_focus", result.ok, result.detail, result.payload))
+        response = ok("window_focus", input_payload(result.tool or "window_focus", result.ok, result.detail, result.payload))
+        response["ok"] = result.ok
+        return response
 
     def window_close(name: str) -> dict[str, Any]:
         if not services.safety.check("window_close"):
             return error("window_close", "blocked by safety gate")
         result = services.executor.close_window(name)
-        return ok("window_close", input_payload(result.tool or "window_close", result.ok, result.detail, result.payload))
+        response = ok("window_close", input_payload(result.tool or "window_close", result.ok, result.detail, result.payload))
+        response["ok"] = result.ok
+        return response
 
     def window_resize(name: str | None = None, width: int | None = None, height: int | None = None, x: int | None = None, y: int | None = None) -> dict[str, Any]:
         if not services.safety.check("window_resize"):
             return error("window_resize", "blocked by safety gate")
         result = services.executor.resize_window(name=name, width=width, height=height, x=x, y=y)
-        return ok("window_resize", input_payload(result.tool or "window_resize", result.ok, result.detail, result.payload))
+        response = ok("window_resize", input_payload(result.tool or "window_resize", result.ok, result.detail, result.payload), message="ok" if result.ok else "error")
+        response["ok"] = result.ok
+        return response
 
     def window_minimize(name: str | None = None) -> dict[str, Any]:
         if not services.safety.check("window_minimize"):
             return error("window_minimize", "blocked by safety gate")
         result = services.executor.minimize_window(name)
-        return ok("window_minimize", input_payload(result.tool or "window_minimize", result.ok, result.detail, result.payload))
+        response = ok("window_minimize", input_payload(result.tool or "window_minimize", result.ok, result.detail, result.payload))
+        response["ok"] = result.ok
+        return response
 
     def window_maximize(name: str | None = None) -> dict[str, Any]:
         if not services.safety.check("window_maximize"):
             return error("window_maximize", "blocked by safety gate")
         result = services.executor.maximize_window(name)
-        return ok("window_maximize", input_payload(result.tool or "window_maximize", result.ok, result.detail, result.payload))
+        response = ok("window_maximize", input_payload(result.tool or "window_maximize", result.ok, result.detail, result.payload))
+        response["ok"] = result.ok
+        return response
 
     def window_restore(name: str | None = None) -> dict[str, Any]:
         if not services.safety.check("window_restore"):
             return error("window_restore", "blocked by safety gate")
         result = services.executor.restore_window(name)
-        return ok("window_restore", input_payload(result.tool or "window_restore", result.ok, result.detail, result.payload))
+        response = ok("window_restore", input_payload(result.tool or "window_restore", result.ok, result.detail, result.payload))
+        response["ok"] = result.ok
+        return response
 
     registry.register(ToolSpec(name="window_launch", kind="window", params_schema={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}, result_schema=RESULT_SCHEMAS["input"], permission="launch_app", executor=window_launch, description="Launch an application window. Use this when the workflow starts from a named desktop app.\n\nParameters: name identifies the app or window to launch.\nReturns: standard input envelope with launch and focus details.\nSafety: may start external applications; gated by the safety service.\nExamples: {\"name\": \"main\"}.", param_description="name: app or window to launch.", result_description="Standard input envelope with launch and focus details.", input_examples=[{"name": "main"}], output_examples=[], safety_notes="May start external applications; gated by the safety service.", implementation_notes="Launches via the executor and reuses the input envelope."))
     registry.register(ToolSpec(name="window_switch", kind="window", params_schema={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}, result_schema=RESULT_SCHEMAS["input"], permission="window_switch", executor=window_switch, description="Switch to an already open window. Use this to move foreground focus between running apps or documents.\n\nParameters: name identifies the target window.\nReturns: standard input envelope with switch details. The payload exposes the prior active window, the current active window, their handles when available, whether the previous window was restored from a minimized state, and the backend match mode so clients can verify the switch happened in the intended context.\nBehavior note: if the source window is minimized, it is restored before the foreground switch so the resulting focus change is visible and consistent.\nBehavior note: use this as part of an observe -> switch -> observe loop so the current foreground target can be verified immediately after the transition.\nSafety: confirm the target window before switching.\nExamples: {\"name\": \"main\"}.", param_description="name: target window.", result_description="Standard input envelope with switch details. Payload includes target_window, previous_window, previous_handle, current_window, current_handle, matched_by, restored_from_minimized, and backend_response.", input_examples=[{"name": "main"}], output_examples=[{"ok": True, "tool": "window_switch", "message": "ok", "data": {"action": "window_switch", "ok": True, "detail": "Switched to ... Sublime Text window.", "payload": {"name": "Sublime Text", "target_window": "Sublime Text", "previous_window": "Codex", "previous_handle": 12345, "current_window": "C:\\Users\\lenovo\\Desktop\\prompt.txt - Sublime Text", "current_handle": 67890, "matched_by": "name", "restored_from_minimized": True, "backend_response": ["Switched to ... Sublime Text window.", 0], "backend_response_detail": "Switched to ... Sublime Text window.", "backend_response_code": 0}}}], safety_notes="Confirm the target window before switching.", implementation_notes="Uses fuzzy matching with foreground restoration and restores minimized sources before switching when needed."))

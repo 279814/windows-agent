@@ -812,7 +812,25 @@ class Executor:
         x: int | None = None,
         y: int | None = None,
     ) -> InputResult:
-        before = self._snapshot_window(name, refresh=True) or {"name": name, "status": None, "handle": None}
+        before = self._snapshot_window(name, refresh=True)
+        before_status = str(before.get("status", "")).lower() if before else None
+        if before is None:
+            return self._result(
+                "window_resize",
+                f"window_not_found:{name or 'active'}",
+                ok=False,
+                payload={
+                    "error_kind": "window_not_found",
+                    "error_message": f"Window not found: {name or 'active'}",
+                    **self._window_payload(target_window=name, before={"name": name, "status": None, "handle": None}, after=None),
+                    "verified": False,
+                    "reason": "not_found",
+                    "attempted_restore": False,
+                    "requested_size": {"width": width, "height": height},
+                    "requested_position": {"x": x, "y": y},
+                },
+                tool="window_resize",
+            )
         target_name = before.get("name") if before else name
         if self._backend is None:
             return self._result(
@@ -827,8 +845,54 @@ class Executor:
             size = (width, height) if width is not None and height is not None else None
             reason = None
             attempted_restore = False
-            if str(before.get("status", "")).lower() == "maximized":
-                reason = "maximized"
+            original_status = before_status
+            if before_status == "minimized":
+                restore_app = getattr(self._backend, "restore_app", None)
+                if callable(restore_app):
+                    attempted_restore = True
+                    try:
+                        restore_app(name=name)
+                    except Exception:
+                        after = self._snapshot_window(name, refresh=True)
+                        return self._result(
+                            "window_resize",
+                            f"restore failed for {target_name}",
+                            ok=False,
+                            payload={
+                                **self._window_payload(target_window=target_name, before=before, after=after),
+                                "verified": False,
+                                "reason": original_status,
+                                "attempted_restore": attempted_restore,
+                                "error_kind": "restore_failed",
+                                "error_message": f"Failed to restore minimized window: {target_name}",
+                                "requested_size": {"width": width, "height": height},
+                                "requested_position": {"x": x, "y": y},
+                            },
+                            tool="window_resize",
+                        )
+                    before = self._snapshot_window(name, refresh=True) or before
+                    before_status = str(before.get("status", "")).lower() if before else before_status
+                    if before_status == "minimized":
+                        after = self._snapshot_window(name, refresh=True)
+                        return self._result(
+                            "window_resize",
+                            f"restore failed for {target_name}",
+                            ok=False,
+                            payload={
+                                **self._window_payload(target_window=target_name, before=before, after=after),
+                                "verified": False,
+                                "reason": original_status,
+                                "attempted_restore": attempted_restore,
+                                "error_kind": "restore_failed",
+                                "error_message": f"Failed to restore minimized window: {target_name}",
+                                "requested_size": {"width": width, "height": height},
+                                "requested_position": {"x": x, "y": y},
+                            },
+                            tool="window_resize",
+                        )
+                    reason = original_status
+            elif before_status == "maximized":
+                reason = original_status
                 restore_app = getattr(self._backend, "restore_app", None)
                 if callable(restore_app):
                     attempted_restore = True
@@ -837,6 +901,9 @@ class Executor:
                     except Exception:
                         pass
                     before = self._snapshot_window(name, refresh=True) or before
+                    before_status = str(before.get("status", "")).lower() if before else before_status
+                    if before_status != "maximized":
+                        reason = None
             try:
                 response = self._backend.resize_app(name=name, size=size, loc=loc)
             except Exception as exc:
@@ -856,11 +923,14 @@ class Executor:
                     tool="window_resize",
                 )
             after = self._snapshot_window(name, refresh=True)
-            verified = bool(after and width is not None and height is not None and str(after.get("status", "")).lower() != "maximized")
+            after_status = str(after.get("status", "")).lower() if after else None
+            verified = bool(after and after_status not in {"minimized", "maximized"})
             detail = str(response)
             ok_flag = verified
-            if not ok_flag and reason == "maximized":
-                detail = f"{target_name} is maximized"
+            if not ok_flag and reason in {"maximized", "minimized"}:
+                detail = f"{target_name} is {reason}"
+            if not ok_flag and after is None:
+                detail = f"Resize verification failed for {target_name}."
             payload = {
                 **self._window_payload(target_window=target_name, before=before, after=after),
                 "verified": verified,
