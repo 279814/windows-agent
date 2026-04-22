@@ -856,7 +856,13 @@ class Executor:
             response = self._backend.focus_app(name)
             return self._result("window_focus", str(response), tool="window_focus")
 
-        return self.switch_window(name)
+        result = self.switch_window(name)
+        if result.payload is None:
+            result.payload = {}
+        result.action = "window_focus"
+        result.tool = "window_focus"
+        result.payload["strategy"] = "switch_window"
+        return result
 
     def close_window(self, name: str) -> InputResult:
         def _normalize_backend_response(response: Any) -> tuple[str, int | None]:
