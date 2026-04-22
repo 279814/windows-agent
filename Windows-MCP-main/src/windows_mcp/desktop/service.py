@@ -1,3 +1,9 @@
+from windows_mcp.errors import (
+    APP_ERROR_CAPABILITY_MISSING,
+    APP_ERROR_NOT_FOUND,
+    APP_ERROR_OPERATION_FAILED,
+    APP_ERROR_VERIFICATION_TIMEOUT,
+)
 from windows_mcp.desktop.utils import (
     ps_quote,
     ps_quote_for_xml,
@@ -511,14 +517,14 @@ class Desktop:
     def _classify_app_error(self, response: str, *, verified: bool = False, pid: int = 0) -> str:
         lowered = response.lower()
         if "not implemented" in lowered or "not supported" in lowered or "capability" in lowered:
-            return "capability_missing"
-        if "not found" in lowered or "no windows found" in lowered or "application" in lowered and "not found" in lowered:
-            return "not_found"
+            return APP_ERROR_CAPABILITY_MISSING
+        if "not found" in lowered or "no windows found" in lowered or ("application" in lowered and "not found" in lowered):
+            return APP_ERROR_NOT_FOUND
         if "not detected yet" in lowered and pid > 0:
-            return "verification_timeout"
+            return APP_ERROR_VERIFICATION_TIMEOUT
         if verified:
-            return "operation_failed"
-        return "operation_failed"
+            return APP_ERROR_OPERATION_FAILED
+        return APP_ERROR_OPERATION_FAILED
 
     def _wrap_app_result(
         self,

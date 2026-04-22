@@ -4,18 +4,24 @@ from typing import Any, Literal
 
 from mcp.types import ToolAnnotations
 from windows_mcp.analytics import with_analytics
+from windows_mcp.errors import (
+    APP_ERROR_CAPABILITY_MISSING,
+    APP_ERROR_NOT_FOUND,
+    APP_ERROR_OPERATION_FAILED,
+    APP_ERROR_VERIFICATION_TIMEOUT,
+)
 from fastmcp import Context
 
 
 def _classify_app_error(response: str) -> str:
     lowered = response.lower()
     if "not implemented" in lowered or "not supported" in lowered or "capability" in lowered:
-        return "capability_missing"
+        return APP_ERROR_CAPABILITY_MISSING
     if "not found" in lowered or "no windows found" in lowered or ("application" in lowered and "not found" in lowered):
-        return "not_found"
+        return APP_ERROR_NOT_FOUND
     if "not detected yet" in lowered:
-        return "verification_timeout"
-    return "operation_failed"
+        return APP_ERROR_VERIFICATION_TIMEOUT
+    return APP_ERROR_OPERATION_FAILED
 
 
 def _result(tool: str, mode: str, ok: bool, message: str, *, name: str | None, response: str, status: int, pid: int, verified: bool = False, verification_source: str | None = None) -> dict[str, Any]:

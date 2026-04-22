@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from types import ModuleType
 from typing import Any
+import sys
 
 
 class BackendLoadError(RuntimeError):
@@ -24,17 +26,37 @@ class BackendBundle:
     source_path: Path
 
 
+def _ensure_namespace_package(module_name: str, package_path: Path) -> ModuleType:
+    module = sys.modules.get(module_name)
+    if module is None:
+        module = ModuleType(module_name)
+        module.__path__ = [str(package_path)]
+        sys.modules[module_name] = module
+    else:
+        existing_path = list(getattr(module, "__path__", []))
+        if str(package_path) not in existing_path:
+            existing_path.append(str(package_path))
+            module.__path__ = existing_path
+    return module
+
+
 def load_windows_mcp_desktop(source_root: str | Path) -> WindowsMcpBackend:
     root = Path(source_root)
-    service_path = root / "src" / "windows_mcp" / "desktop" / "service.py"
+    src_root = root / "src"
+    package_root = src_root / "windows_mcp"
+    service_path = package_root / "desktop" / "service.py"
     if not service_path.exists():
         raise BackendLoadError(f"Windows-MCP service module not found: {service_path}")
+
+    _ensure_namespace_package("windows_mcp", package_root)
+    _ensure_namespace_package("windows_mcp.desktop", package_root / "desktop")
 
     spec = spec_from_file_location("windows_mcp.desktop.service", service_path)
     if spec is None or spec.loader is None:
         raise BackendLoadError(f"Unable to load module from: {service_path}")
 
     module = module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
 
     desktop_state_cls = getattr(module, "DesktopState", None)
