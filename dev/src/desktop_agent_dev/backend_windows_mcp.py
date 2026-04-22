@@ -36,6 +36,35 @@ def load_windows_mcp_desktop(source_root: str | Path) -> WindowsMcpBackend:
 
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
+
+    desktop_state_cls = getattr(module, "DesktopState", None)
+    if desktop_state_cls is not None:
+        init_code = getattr(getattr(desktop_state_cls, "__init__", None), "__code__", None)
+        if init_code is not None and "focused_control" not in init_code.co_varnames:
+            class DesktopStateCompat:
+                def __init__(self, *args: Any, **kwargs: Any) -> None:
+                    field_order = [
+                        "active_desktop",
+                        "all_desktops",
+                        "active_window",
+                        "windows",
+                        "screenshot",
+                        "cursor_position",
+                        "screenshot_original_size",
+                        "screenshot_region",
+                        "screenshot_displays",
+                        "screenshot_backend",
+                        "tree_state",
+                        "focused_control",
+                    ]
+                    for index, value in enumerate(args):
+                        if index < len(field_order):
+                            kwargs.setdefault(field_order[index], value)
+                    for key, value in kwargs.items():
+                        setattr(self, key, value)
+
+            module.DesktopState = DesktopStateCompat
+
     desktop = module.Desktop()
     return WindowsMcpBackend(desktop=desktop, source_path=service_path)
 
