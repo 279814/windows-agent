@@ -829,4 +829,15 @@ class Executor:
             verified = bool(after and str(after.get("status", "")).lower() not in {"minimized", "maximized"})
             payload = {**self._window_payload(target_window=before.get("name") if before else name, before=before, after=after), "verified": verified}
             return self._result("window_restore", str(response), payload=payload, tool="window_restore")
-        raise ExecutorError("Backend does not expose restore_app().")
+        return self._result(
+            "window_restore",
+            f"restore:{name or 'active'}",
+            ok=False,
+            payload={
+                **self._window_payload(target_window=before.get("name") if before else name, before=before),
+                "verified": False,
+                "error_kind": "capability_missing",
+                "error_message": "Backend does not expose restore_app().",
+            },
+            tool="window_restore",
+        )
