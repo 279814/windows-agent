@@ -1,9 +1,23 @@
 from desktop_agent_dev.executor import Executor, InputResult
 
 
+class FakeWindowState:
+    def __init__(self, name: str = "main", handle: int | None = 1, status: str = "normal") -> None:
+        self.name = name
+        self.handle = handle
+        self.status = status
+        self.window_title = name
+
+
+class FakeDesktopState:
+    def __init__(self, active_window: FakeWindowState | None) -> None:
+        self.active_window = active_window
+
+
 class FakeExecBackend:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple, dict]] = []
+        self._state = FakeDesktopState(FakeWindowState())
 
     def click(self, loc: tuple[int, int], button: str = "left", clicks: int = 1) -> None:
         self.calls.append(("click", (loc,), {"button": button, "clicks": clicks}))
@@ -52,6 +66,7 @@ class FakeExecBackend:
 
     def close_app(self, name: str) -> str:
         self.calls.append(("close_app", (name,), {}))
+        self._state = FakeDesktopState(None)
         return f"close:{name}"
 
     def resize_app(self, name=None, size=None, loc=None) -> str:
@@ -61,6 +76,9 @@ class FakeExecBackend:
     def launch_app(self, name: str) -> str:
         self.calls.append(("launch_app", (name,), {}))
         return f"launch:{name}"
+
+    def get_state(self, use_vision: bool = False, as_bytes: bool = False) -> FakeDesktopState:
+        return self._state
 
 
 def test_executor_stubs_return_values() -> None:
@@ -83,7 +101,10 @@ def test_executor_uses_backend_for_input() -> None:
     assert executor.multi_edit([(1, 2, "a"), (3, 4, "b")]).detail == "multi_edited:2"
     assert executor.switch_window("main").detail == "switch:main"
     assert executor.focus_window("main").detail == "focus:main"
-    assert executor.close_window("main").detail == "close:main"
+    close_result = executor.close_window("main")
+    assert close_result.ok is True
+    assert close_result.payload is not None
+    assert close_result.payload["post_close_verified"] is True
     assert executor.resize_window(name="main", width=100, height=200).detail == "resize:main"
     assert executor.launch_app("calc").detail == "launch:calc"
 
@@ -164,19 +185,21 @@ def test_hit_test_prefers_more_specific_overlap_candidate() -> None:
     assert result.payload["element"]["z_index"] == 1
 
 
-def test_executor_close_window_uses_backend_close_app() -> None:
+def test_executor_close_window_uses_backend_close_app_and_verifies_state_change() -> None:
     backend = FakeExecBackend()
     executor = Executor(backend=backend)
 
     result = executor.close_window("main")
 
     assert result.ok is True
-    assert result.detail == "close:main"
     assert result.tool == "window_close"
     assert result.payload is not None
     assert result.payload["close_strategy"] == "backend.close_app"
+    assert result.payload["outcome"] in {"success", "success_wm_close_degraded"}
+    assert result.payload["post_close_verified"] is True
     assert result.payload["backend_response"] == "close:main"
     assert result.payload["exit_code"] == 0
+    assert result.detail
     assert backend.calls[-1][0] == "close_app"
     assert backend.calls[-1][1] == ("main",)
 
@@ -197,4 +220,6 @@ def test_executor_close_window_marks_backend_failure_as_not_ok() -> None:
     assert result.detail == "Failed to close main."
     assert result.payload is not None
     assert result.payload["close_strategy"] == "backend.close_app"
+    assert result.payload["outcome"] == "execution_failed"
+    assert result.payload["post_close_verified"] is False
     assert result.payload["exit_code"] == 1
