@@ -956,6 +956,26 @@ class Desktop:
         except Exception as e:
             return (f"Error restoring app: {str(e)}", 1)
 
+    def maximize_app(self, name: str | None = None):
+        try:
+            if name is not None:
+                window, error = self._find_window_by_name(name, refresh_state=True)
+                if window is None:
+                    return error, 1
+            else:
+                window = self.desktop_state.active_window if self.desktop_state else None
+                if window is None:
+                    return "No active window found", 1
+
+            target_handle = window.handle
+            if not win32gui.IsWindow(target_handle):
+                return f"Invalid window handle for {window.name.title()}", 1
+
+            win32gui.ShowWindow(target_handle, win32con.SW_MAXIMIZE)
+            return f"Maximized {window.name.title()} window.", 0
+        except Exception as e:
+            return (f"Error maximizing app: {str(e)}", 1)
+
     def close_app(self, name: str):
         try:
             window, error = self._find_window_by_name(name, refresh_state=True)

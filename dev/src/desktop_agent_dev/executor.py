@@ -807,12 +807,32 @@ class Executor:
         raise ExecutorError("Backend does not expose minimize_app().")
 
     def maximize_window(self, name: str | None = None) -> InputResult:
+        before = self._snapshot_window(name, refresh=True) or {"name": name, "status": None, "handle": None}
         if self._backend is None:
-            return self._result("window_maximize", f"maximize:{name or 'active'}", tool="window_maximize")
+            return self._result(
+                "window_maximize",
+                f"maximize:{name or 'active'}",
+                payload={**self._window_payload(target_window=before.get("name") if before else name, before=before), "verified": False},
+                tool="window_maximize",
+            )
         if hasattr(self._backend, "maximize_app"):
             response = self._backend.maximize_app(name=name)
-            return self._result("window_maximize", str(response), tool="window_maximize")
-        raise ExecutorError("Backend does not expose maximize_app().")
+            after = self._snapshot_window(name, refresh=True)
+            verified = bool(after and str(after.get("status", "")).lower() == "maximized")
+            payload = {**self._window_payload(target_window=before.get("name") if before else name, before=before, after=after), "verified": verified}
+            return self._result("window_maximize", str(response), payload=payload, tool="window_maximize")
+        return self._result(
+            "window_maximize",
+            f"maximize:{name or 'active'}",
+            ok=False,
+            payload={
+                **self._window_payload(target_window=before.get("name") if before else name, before=before),
+                "verified": False,
+                "error_kind": "capability_missing",
+                "error_message": "Backend does not expose maximize_app().",
+            },
+            tool="window_maximize",
+        )
 
     def restore_window(self, name: str | None = None) -> InputResult:
         before = self._snapshot_window(name, refresh=True) or {"name": name, "status": None, "handle": None}
