@@ -30,6 +30,7 @@ from markdownify import markdownify
 from fuzzywuzzy import process
 from time import sleep, time, perf_counter
 from psutil import Process
+import psutil
 import win32process
 import win32gui
 import win32con
@@ -252,6 +253,74 @@ class Desktop:
             except Exception:
                 continue
         return candidates
+
+    def _snapshot_process_ids(self) -> set[int]:
+        process_ids: set[int] = set()
+        try:
+            for proc in psutil.process_iter(["pid"]):
+                pid = getattr(proc, "pid", None)
+                if isinstance(pid, int) and pid > 0:
+                    process_ids.add(pid)
+        except Exception:
+            pass
+        return process_ids
+
+    def _find_matching_process_from_pid_candidates(
+        self,
+        name: str,
+        *,
+        pid_candidates: set[int],
+        baseline_pids: set[int] | None = None,
+        attempts: int = 3,
+        delay_seconds: float = 0.5,
+    ) -> tuple[str | None, int | None, str]:
+        expected_targets = self._expand_launch_aliases(self._launch_name_variants(name))
+        baseline_pids = baseline_pids or set()
+        if not expected_targets:
+            return None, None, "no_expected_target"
+
+        tracked_roots = {pid for pid in pid_candidates if pid > 0}
+        for attempt in range(max(1, attempts)):
+            if attempt > 0:
+                sleep(delay_seconds)
+
+            expanded_candidates = set(tracked_roots)
+            for tracked_pid in list(tracked_roots):
+                expanded_candidates.update(self._iter_related_pids(tracked_pid))
+
+            for tracked_pid in sorted(expanded_candidates):
+                process_targets, process_label = self._process_verification_signature(tracked_pid)
+                process_targets = self._expand_launch_aliases(process_targets)
+                if process_targets.intersection(expected_targets):
+                    return process_label or str(tracked_pid), tracked_pid, "process"
+
+            try:
+                for proc in psutil.process_iter(["pid", "ppid", "name", "exe", "cmdline"]):
+                    pid = proc.info.get("pid")
+                    if not isinstance(pid, int) or pid <= 0 or pid in baseline_pids:
+                        continue
+                    ppid = proc.info.get("ppid")
+                    name_candidates = [
+                        proc.info.get("name"),
+                        proc.info.get("exe"),
+                        " ".join(proc.info.get("cmdline") or []),
+                    ]
+                    process_targets: set[str] = set()
+                    process_label = None
+                    for candidate in name_candidates:
+                        if candidate:
+                            process_targets.update(self._launch_name_variants(str(candidate)))
+                            process_label = process_label or str(candidate)
+                    process_targets = self._expand_launch_aliases(process_targets)
+                    if process_targets.intersection(expected_targets):
+                        if ppid in tracked_roots or tracked_roots.intersection(self._iter_related_pids(ppid)):
+                            return process_label or str(pid), pid, "process_scan"
+                        if tracked_roots and pid in expanded_candidates:
+                            return process_label or str(pid), pid, "process_scan"
+            except Exception:
+                continue
+
+        return None, None, "no_process_match"
 
     def _control_text_snapshot(self, control: Any | None, window_name: str | None = None) -> dict[str, Any] | None:
         if control is None:
@@ -976,6 +1045,7 @@ class Desktop:
         *,
         known_pids: list[int] | None = None,
         baseline_handles: set[int] | None = None,
+        baseline_pids: set[int] | None = None,
         attempts: int = 1,
         delay_seconds: float = 0.4,
     ) -> tuple[str | None, int | None, str]:
@@ -1030,6 +1100,16 @@ class Desktop:
                 if process_targets.intersection(expected_targets):
                     return process_label or str(candidate_pid), candidate_pid, "process"
 
+            process_name, process_pid, process_source = self._find_matching_process_from_pid_candidates(
+                name,
+                pid_candidates=pid_candidates,
+                baseline_pids=baseline_pids,
+                attempts=1,
+                delay_seconds=delay_seconds,
+            )
+            if process_name is not None:
+                return process_name, process_pid, process_source
+
         return None, None, "no_match"
 
     def launch_app(self, name: str) -> tuple[str, int, int]:
@@ -1047,6 +1127,7 @@ class Desktop:
             }
         except Exception:
             baseline_handles = set()
+        baseline_pids = self._snapshot_process_ids()
 
         def _verify_and_return(response: str, pid: int, attempt_label: str) -> tuple[str, int, int] | None:
             extracted_pids = self._extract_pid_candidates(response)
@@ -1058,6 +1139,7 @@ class Desktop:
                 pid=pid,
                 known_pids=observed_pids,
                 baseline_handles=baseline_handles,
+                baseline_pids=baseline_pids,
                 attempts=4 if pid > 0 else 5,
                 delay_seconds=0.45,
             )
@@ -1114,6 +1196,7 @@ class Desktop:
             pid=0,
             known_pids=observed_pids,
             baseline_handles=baseline_handles,
+            baseline_pids=baseline_pids,
             attempts=6 if observed_pids else 5,
             delay_seconds=0.5,
         )
