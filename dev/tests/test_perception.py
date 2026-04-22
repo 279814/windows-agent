@@ -28,6 +28,20 @@ class FakeTreeNode:
 class FakeTreeState:
     def __init__(self) -> None:
         self.interactive_nodes = [FakeTreeNode("Button", "ButtonControl")]
+        self.focused_node = type(
+            "FocusedNode",
+            (),
+            {
+                "name": "notepad",
+                "value": "notepad",
+                "text": "notepad",
+                "control_type": "Edit",
+                "automation_id": "searchBox",
+                "class_name": "TextBox",
+                "role": "text box",
+                "bounding_box": FakeBox(16, 16, 360, 44),
+            },
+        )()
 
 
 class FakeState:
@@ -66,3 +80,8 @@ def test_snapshot_from_backend() -> None:
     assert snapshot.cursor == (10, 20)
     assert snapshot.screenshot == b"image"
     assert snapshot.tree_nodes[0].name == "Button"
+    assert snapshot.focused_control is not None
+    assert snapshot.focused_control["name"] == "notepad"
+    assert snapshot.focused_control["value"] == "notepad"
+    assert snapshot.focused_control["text"] == "notepad"
+    assert snapshot.focused_control["window_title"] == "Editor"

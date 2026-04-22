@@ -11,13 +11,14 @@ from windows_mcp.vdm.core import (
 )
 from windows_mcp.desktop.views import DesktopState, Window, Browser, Status, Size
 from windows_mcp.tree.views import BoundingBox, TreeElementNode, TreeState
+from windows_mcp.uia import GetFocusedControl, PropertyId
 from concurrent.futures import ThreadPoolExecutor
 from PIL import ImageFont, ImageDraw, Image
 from windows_mcp.tree.service import Tree
 from windows_mcp.desktop import screenshot as screenshot_capture
 from locale import getpreferredencoding
 from contextlib import contextmanager
-from typing import Literal
+from typing import Any, Literal
 from markdownify import markdownify
 from fuzzywuzzy import process
 from time import sleep, time, perf_counter
@@ -80,6 +81,61 @@ class Desktop:
         self.tree = Tree(self)
         self.desktop_state = None
 
+    def _control_text_snapshot(self, control: Any | None, window_name: str | None = None) -> dict[str, Any] | None:
+        if control is None:
+            return None
+        try:
+            name = getattr(control, "Name", None)
+        except Exception:
+            name = None
+        try:
+            control_type = getattr(control, "LocalizedControlType", None) or getattr(control, "ControlTypeName", None)
+        except Exception:
+            control_type = None
+        try:
+            value = control.GetPropertyValue(PropertyId.LegacyIAccessibleValueProperty)
+        except Exception:
+            value = None
+        try:
+            text_value = control.GetPropertyValue(PropertyId.ValueValueProperty)
+        except Exception:
+            text_value = None
+        if text_value is None:
+            text_value = value
+        if text_value is None and name:
+            text_value = name
+        if value is None:
+            value = text_value
+        try:
+            box = control.BoundingRectangle
+            bounds = (box.left, box.top, box.right, box.bottom)
+        except Exception:
+            bounds = None
+        try:
+            automation_id = getattr(control, "AutomationId", None) or getattr(control, "CachedAutomationId", None)
+        except Exception:
+            automation_id = None
+        try:
+            class_name = getattr(control, "ClassName", None) or getattr(control, "CachedClassName", None)
+        except Exception:
+            class_name = None
+        try:
+            role = control.GetPropertyValue(PropertyId.LegacyIAccessibleRoleProperty)
+        except Exception:
+            role = None
+        return {
+            "name": name,
+            "value": value,
+            "text": text_value,
+            "control_type": control_type,
+            "automation_id": automation_id,
+            "class_name": class_name,
+            "role": role,
+            "bounds": bounds,
+            "window_title": window_name,
+            "source": "windows-mcp",
+        }
+
     def get_state(
         self,
         use_annotation: bool | str = True,
@@ -123,8 +179,19 @@ class Desktop:
         # Fast path for Screenshot tool (use_ui_tree=False): skip window enumeration.
         # UIAutomation calls (get_controls_handles / get_windows / get_active_window)
         # can hang when an app is launching and not responding to WM messages.
+        # ...
+        try:
+            active_desktop = get_current_desktop()
+            all_desktops = get_all_desktops()
+        except RuntimeError:
+            active_desktop = {
+                "id": "00000000-0000-0000-0000-000000000000",
+                "name": "Default Desktop",
+            }
+            all_desktops = [active_desktop]
+
         if use_ui_tree:
-            controls_handles = self.get_controls_handles()  # Taskbar,Program Manager,Apps, Dialogs
+            controls_handles = self.get_controls_handles()  # Taskbar, Program Manager, Apps, Dialogs
             windows, windows_handles = self.get_windows(controls_handles=controls_handles)  # Apps
             active_window = self.get_active_window(windows=windows)  # Active Window
             active_window_handle = active_window.handle if active_window else None
@@ -136,16 +203,6 @@ class Desktop:
             active_window_handle = None
 
         cursor_position = self.get_cursor_location()
-
-        try:
-            active_desktop = get_current_desktop()
-            all_desktops = get_all_desktops()
-        except RuntimeError:
-            active_desktop = {
-                "id": "00000000-0000-0000-0000-000000000000",
-                "name": "Default Desktop",
-            }
-            all_desktops = [active_desktop]
 
         if active_window is not None and active_window in windows:
             windows.remove(active_window)
@@ -242,6 +299,12 @@ class Desktop:
         else:
             screenshot = None
 
+        focused_control = None
+        try:
+            focused_control = self._control_text_snapshot(GetFocusedControl(), active_window.name if active_window else None)
+        except Exception:
+            focused_control = None
+
         self.desktop_state = DesktopState(
             active_window=active_window,
             windows=windows,
@@ -253,6 +316,7 @@ class Desktop:
             screenshot_region=screenshot_region,
             screenshot_displays=display_indices,
             tree_state=tree_state,
+            focused_control=focused_control,
             screenshot_backend=getattr(self, "_last_screenshot_backend", None) if use_vision else None,
         )
         if profile_enabled:

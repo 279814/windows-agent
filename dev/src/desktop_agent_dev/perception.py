@@ -36,6 +36,7 @@ class DesktopSnapshot:
     screenshot_path: str | None = None
     cursor: tuple[int, int] | None = None
     tree_nodes: list[TreeNodeInfo] = field(default_factory=list)
+    focused_control: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -117,6 +118,38 @@ class Perception:
         return nodes
 
     @staticmethod
+    def _extract_node_text(node: Any) -> str | None:
+        for attr in ("value", "text", "name"):
+            value = getattr(node, attr, None)
+            if isinstance(value, str) and value.strip():
+                return value
+        return None
+
+    @staticmethod
+    def _extract_focused_control(tree_state: Any, active_window: Any) -> dict[str, Any] | None:
+        if tree_state is None:
+            return None
+
+        focused = getattr(tree_state, "focused_node", None) or getattr(tree_state, "focus_node", None) or getattr(tree_state, "focused_control", None)
+        if focused is None:
+            return None
+
+        box = getattr(focused, "bounding_box", None)
+        bounds = (box.left, box.top, box.right, box.bottom) if box is not None else None
+        return {
+            "name": getattr(focused, "name", None),
+            "value": getattr(focused, "value", None),
+            "text": Perception._extract_node_text(focused),
+            "control_type": getattr(focused, "control_type", None),
+            "automation_id": getattr(focused, "automation_id", None),
+            "class_name": getattr(focused, "class_name", None),
+            "role": getattr(focused, "role", None),
+            "bounds": bounds,
+            "window_title": getattr(active_window, "name", None) if active_window is not None else None,
+            "source": "windows-mcp",
+        }
+
+    @staticmethod
     def _from_backend_state(state: Any) -> DesktopSnapshot:
         windows = []
         seen: set[tuple[int | None, str]] = set()
@@ -140,6 +173,7 @@ class Perception:
         tree_state = getattr(state, "tree_state", None)
         cursor = getattr(state, "cursor_position", None)
         screenshot = getattr(state, "screenshot", None)
+        focused_control = getattr(state, "focused_control", None) or Perception._extract_focused_control(tree_state, active_window)
         if isinstance(screenshot, str):
             screenshot = screenshot.encode("utf-8")
         screenshot_path = getattr(state, "screenshot_path", None)
@@ -158,5 +192,6 @@ class Perception:
             screenshot_path=screenshot_path,
             cursor=cursor,
             tree_nodes=Perception._from_backend_tree_state(tree_state) if tree_state else [],
+            focused_control=focused_control,
             metadata=metadata,
         )
