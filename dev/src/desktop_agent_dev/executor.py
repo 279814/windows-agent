@@ -813,21 +813,63 @@ class Executor:
         y: int | None = None,
     ) -> InputResult:
         before = self._snapshot_window(name, refresh=True) or {"name": name, "status": None, "handle": None}
+        target_name = before.get("name") if before else name
         if self._backend is None:
             return self._result(
                 "window_resize",
                 f"resize:{name or 'active'}:{width}x{height}@{x},{y}",
-                payload={**self._window_payload(target_window=before.get("name") if before else name, before=before), "verified": False},
+                payload={**self._window_payload(target_window=target_name, before=before), "verified": False},
                 tool="window_resize",
             )
 
         if hasattr(self._backend, "resize_app"):
             loc = (x, y) if x is not None and y is not None else None
             size = (width, height) if width is not None and height is not None else None
-            response = self._backend.resize_app(name=name, size=size, loc=loc)
+            reason = None
+            attempted_restore = False
+            if str(before.get("status", "")).lower() == "maximized":
+                reason = "maximized"
+                restore_app = getattr(self._backend, "restore_app", None)
+                if callable(restore_app):
+                    attempted_restore = True
+                    try:
+                        restore_app(name=name)
+                    except Exception:
+                        pass
+                    before = self._snapshot_window(name, refresh=True) or before
+            try:
+                response = self._backend.resize_app(name=name, size=size, loc=loc)
+            except Exception as exc:
+                after = self._snapshot_window(name, refresh=True)
+                return self._result(
+                    "window_resize",
+                    f"resize failed:{exc}",
+                    ok=False,
+                    payload={
+                        **self._window_payload(target_window=target_name, before=before, after=after),
+                        "verified": False,
+                        "reason": reason,
+                        "attempted_restore": attempted_restore,
+                        "error_kind": "exception",
+                        "error_message": str(exc),
+                    },
+                    tool="window_resize",
+                )
             after = self._snapshot_window(name, refresh=True)
-            payload = {**self._window_payload(target_window=before.get("name") if before else name, before=before, after=after), "verified": after is not None}
-            return self._result("window_resize", str(response), payload=payload, tool="window_resize")
+            verified = bool(after and width is not None and height is not None and str(after.get("status", "")).lower() != "maximized")
+            detail = str(response)
+            ok_flag = verified
+            if not ok_flag and reason == "maximized":
+                detail = f"{target_name} is maximized"
+            payload = {
+                **self._window_payload(target_window=target_name, before=before, after=after),
+                "verified": verified,
+                "reason": reason,
+                "attempted_restore": attempted_restore,
+                "requested_size": {"width": width, "height": height},
+                "requested_position": {"x": x, "y": y},
+            }
+            return self._result("window_resize", detail, ok=ok_flag, payload=payload, tool="window_resize")
 
         raise ExecutorError("Backend does not expose resize_app().")
 
