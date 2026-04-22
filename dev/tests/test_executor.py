@@ -73,9 +73,8 @@ def test_executor_uses_backend_for_input() -> None:
     backend = FakeExecBackend()
     executor = Executor(backend=backend)
 
-    assert executor.click(100, 200, button="right", clicks=2) == InputResult(
-        action="click", ok=True, detail="clicked:100,200:right:2", tool="input_click"
-    )
+    result = executor.click(100, 200, button="right", clicks=2)
+    assert result == InputResult(action="click", ok=True, detail="clicked:100,200:right:2", payload=result.payload, tool="input_click")
     assert executor.move(9, 8).detail == "moved:9,8"
     assert executor.type_text("hello", press_enter=True, clear=True, caret_position="end").detail == "typed:hello:enter"
     assert executor.shortcut("ctrl+s").detail == "shortcut:ctrl+s"
@@ -103,3 +102,63 @@ def test_executor_uses_backend_for_input() -> None:
         "resize_app",
         "launch_app",
     ]
+
+
+class FakeHitBox:
+    def __init__(self, left: int, top: int, right: int, bottom: int) -> None:
+        self.left = left
+        self.top = top
+        self.right = right
+        self.bottom = bottom
+
+
+class FakeHitNode:
+    def __init__(self, name: str, control_type: str, box: FakeHitBox, automation_id: str | None = None, class_name: str | None = None, role: str | None = None, leaf: bool = True, interactive: bool = True) -> None:
+        self.name = name
+        self.control_type = control_type
+        self.bounding_box = box
+        self.automation_id = automation_id
+        self.class_name = class_name
+        self.role = role
+        self.is_leaf = leaf
+        self.is_interactive = interactive
+        self.is_transparent = False
+        self.is_decorative = False
+        self.children = []
+
+
+class FakeHitTreeState:
+    def __init__(self) -> None:
+        self.interactive_nodes = [
+            FakeHitNode("Container", "Pane", FakeHitBox(0, 0, 200, 200), class_name="Pane", leaf=False, interactive=False),
+            FakeHitNode("PrimaryButton", "Button", FakeHitBox(20, 20, 120, 120), automation_id="primary", role="push button"),
+            FakeHitNode("Overlay", "Text", FakeHitBox(10, 10, 140, 140), class_name="TextBlock", leaf=True, interactive=False),
+        ]
+
+
+class FakeHitState:
+    def __init__(self) -> None:
+        self.tree_state = FakeHitTreeState()
+
+
+class FakeHitBackend:
+    def click(self, loc: tuple[int, int], button: str = "left", clicks: int = 1) -> None:
+        self.last_click = (loc, button, clicks)
+
+    def get_tree_state(self) -> FakeHitTreeState:
+        return FakeHitTreeState()
+
+    def get_state(self, use_vision: bool = False, as_bytes: bool = False) -> FakeHitState:
+        return FakeHitState()
+
+
+def test_hit_test_prefers_more_specific_overlap_candidate() -> None:
+    backend = FakeHitBackend()
+    executor = Executor(backend=backend)
+    result = executor.click(30, 30)
+
+    assert result.payload is not None
+    assert result.payload["element"]["name"] == "PrimaryButton"
+    assert result.payload["element"]["found"] is True
+    assert result.payload["element"]["confidence"] > 0.5
+    assert result.payload["element"]["z_index"] == 1

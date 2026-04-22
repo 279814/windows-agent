@@ -31,7 +31,34 @@ class Executor:
         if backend is None:
             return {"type": "unknown", "name": None, "found": False, "confidence": 0.0}
 
-        def _score_node(node: Any, z_index: int) -> dict[str, Any] | None:
+        def _node_meta(node: Any) -> dict[str, Any]:
+            return {
+                "type": getattr(node, "control_type", "unknown") or "unknown",
+                "name": getattr(node, "name", None),
+                "automation_id": getattr(node, "automation_id", None),
+                "class_name": getattr(node, "class_name", None),
+                "role": getattr(node, "role", None),
+                "process_id": getattr(node, "process_id", None),
+                "window_title": getattr(node, "window_title", None),
+            }
+
+        def _bbox_area(box: Any) -> int:
+            return max(1, (box.right - box.left)) * max(1, (box.bottom - box.top))
+
+        def _is_decorative(node: Any) -> bool:
+            control_type = (getattr(node, "control_type", "") or "").lower()
+            role = (getattr(node, "role", "") or "").lower()
+            name = (getattr(node, "name", "") or "").strip().lower()
+            if control_type in {"imagecontrol", "textcontrol", "panecontrol"} and not name:
+                return True
+            if role in {"image", "graphic", "separator", "static text"} and not getattr(node, "automation_id", None):
+                return True
+            return False
+
+        def _is_leaf(node: Any, siblings: list[Any]) -> bool:
+            return all(getattr(sib, "bounding_box", None) is None or sib is node for sib in siblings)
+
+        def _score_node(node: Any, ancestry_depth: int, sibling_index: int, sibling_count: int, is_leaf: bool) -> dict[str, Any] | None:
             box = getattr(node, "bounding_box", None)
             if box is None:
                 return None
@@ -44,44 +71,62 @@ class Executor:
             area = width * height
             cx = left + width / 2
             cy = top + height / 2
-            dx = abs(x - cx) / width
-            dy = abs(y - cy) / height
-            center_distance = dx + dy
-            area_score = max(0.0, min(1.0, 1.0 - min(area / 1_000_000.0, 1.0)))
-            center_score = max(0.0, 1.0 - min(center_distance, 1.0))
-            z_score = max(0.0, min(1.0, 1.0 - (z_index / 100.0)))
-            specificity_score = 1.0
+            px = abs(x - cx) / width
+            py = abs(y - cy) / height
+            boundary_dx = min(abs(x - left), abs(x - right)) / width
+            boundary_dy = min(abs(y - top), abs(y - bottom)) / height
+            center_bias = max(0.0, 1.0 - min(px + py, 1.0))
+            boundary_penalty = min(1.0, (boundary_dx + boundary_dy) / 2)
+            leaf_bonus = 0.10 if is_leaf else 0.0
+            interactive_bonus = 0.14 if (getattr(node, "name", None) or getattr(node, "automation_id", None) or getattr(node, "role", None)) else 0.0
+            specificity_bonus = 0.0
             if getattr(node, "name", None):
-                specificity_score += 0.08
+                specificity_bonus += 0.05
             if getattr(node, "automation_id", None):
-                specificity_score += 0.12
+                specificity_bonus += 0.10
             if getattr(node, "class_name", None):
-                specificity_score += 0.04
+                specificity_bonus += 0.04
             if getattr(node, "role", None):
-                specificity_score += 0.04
-            if width <= 48 and height <= 48:
-                specificity_score += 0.08
-            if width * height < 20_000:
-                specificity_score += 0.04
-            confidence = min(0.99, round((0.45 * center_score) + (0.2 * z_score) + (0.15 * specificity_score) + (0.2 * (1.0 - area_score)), 3))
+                specificity_bonus += 0.04
+            if width <= 44 and height <= 44:
+                specificity_bonus += 0.05
+            if area < 18_000:
+                specificity_bonus += 0.03
+            decorative_penalty = 0.16 if _is_decorative(node) else 0.0
+            parent_bonus = min(0.12, ancestry_depth * 0.03)
+            child_rank_bonus = max(0.0, 0.06 - (sibling_index * 0.01)) if sibling_count > 1 else 0.0
+            z_order_bonus = max(0.0, min(0.20, 0.20 - (sibling_index * 0.02)))
+            area_penalty = min(0.12, area / 5_000_000.0)
+            confidence = 0.30
+            confidence += center_bias * 0.24
+            confidence += leaf_bonus
+            confidence += interactive_bonus
+            confidence += specificity_bonus
+            confidence += parent_bonus
+            confidence += child_rank_bonus
+            confidence += z_order_bonus
+            confidence -= boundary_penalty * 0.15
+            confidence -= decorative_penalty
+            confidence -= area_penalty
+            confidence = max(0.0, min(0.99, round(confidence, 3)))
             return {
-                "type": getattr(node, "control_type", "unknown") or "unknown",
-                "name": getattr(node, "name", None),
-                "automation_id": getattr(node, "automation_id", None),
-                "class_name": getattr(node, "class_name", None),
-                "role": getattr(node, "role", None),
-                "process_id": getattr(node, "process_id", None),
-                "window_title": getattr(node, "window_title", None),
+                **_node_meta(node),
                 "found": True,
                 "confidence": confidence,
-                "z_index": z_index,
+                "z_index": sibling_index,
+                "ancestry_depth": ancestry_depth,
                 "bounds": {"left": left, "top": top, "right": right, "bottom": bottom},
             }
 
+        def _collect_nodes(state: Any) -> list[Any]:
+            return list(getattr(state, "interactive_nodes", []) or [])
+
         def _best_from_nodes(nodes: list[Any]) -> dict[str, Any] | None:
+            if not nodes:
+                return None
             scored: list[tuple[float, int, dict[str, Any]]] = []
             for idx, node in enumerate(nodes):
-                candidate = _score_node(node, idx)
+                candidate = _score_node(node, ancestry_depth=0, sibling_index=idx, sibling_count=len(nodes), is_leaf=True)
                 if candidate is None:
                     continue
                 scored.append((candidate["confidence"], -idx, candidate))
@@ -89,6 +134,64 @@ class Executor:
                 return None
             scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
             return scored[0][2]
+
+        def _best_from_hierarchy(state: Any) -> dict[str, Any] | None:
+            tree_nodes = _collect_nodes(state)
+            if not tree_nodes:
+                return None
+
+            scored: list[tuple[float, int, dict[str, Any]]] = []
+            for idx, node in enumerate(tree_nodes):
+                box = getattr(node, "bounding_box", None)
+                if box is None:
+                    continue
+                if not (box.left <= x <= box.right and box.top <= y <= box.bottom):
+                    continue
+                candidate = _score_node(
+                    node,
+                    ancestry_depth=1 if getattr(node, "window_title", None) else 0,
+                    sibling_index=idx,
+                    sibling_count=len(tree_nodes),
+                    is_leaf=True,
+                )
+                if candidate is not None:
+                    scored.append((candidate["confidence"], -idx, candidate))
+            if not scored:
+                return None
+            scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            return scored[0][2]
+
+        tree_state = getattr(backend, "get_tree_state", None)
+        if callable(tree_state):
+            try:
+                state = tree_state()
+            except Exception:
+                state = None
+            if state is not None:
+                best = _best_from_hierarchy(state)
+                if best is not None:
+                    best["source"] = "tree_state"
+                    return best
+
+        snapshot = getattr(backend, "get_state", None)
+        if callable(snapshot):
+            try:
+                state = snapshot(use_vision=False, as_bytes=False)
+            except TypeError:
+                try:
+                    state = snapshot()
+                except Exception:
+                    state = None
+            except Exception:
+                state = None
+            if state is not None:
+                tree_state_obj = getattr(state, "tree_state", None)
+                best = _best_from_nodes(_collect_nodes(tree_state_obj))
+                if best is not None:
+                    best["source"] = "snapshot"
+                    return best
+
+        return {"type": "unknown", "name": None, "found": False, "confidence": 0.0}
 
         tree_state = getattr(backend, "get_tree_state", None)
         if callable(tree_state):
