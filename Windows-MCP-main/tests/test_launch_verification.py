@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from windows_mcp.desktop.service import Desktop
+import psutil
 
 
 @dataclass
@@ -32,6 +33,11 @@ class _FakeProcess:
 
     def cmdline(self) -> list[str]:
         return [r"D:\Develop-Data\pycharm\PyCharm 2024.1\bin\pycharm64.exe"]
+
+
+class _IterProc:
+    def __init__(self, pid: int, ppid: int, name: str, exe: str, cmdline: list[str]) -> None:
+        self.info = {"pid": pid, "ppid": ppid, "name": name, "exe": exe, "cmdline": cmdline}
 def _desktop_with_state(state: _State) -> Desktop:
     desktop = Desktop.__new__(Desktop)
     desktop.desktop_state = None
@@ -89,3 +95,31 @@ def test_extract_pid_candidates_reads_successful_launch_results() -> None:
 
     assert 34032 in pids
     assert 6212 in pids
+
+
+def test_find_matching_process_from_pid_candidates_accepts_new_jetbrains_process(monkeypatch) -> None:
+    desktop = _desktop_with_state(_State(windows=[]))
+
+    def _fake_process_iter(attrs: list[str]):
+        return [
+            _IterProc(
+                pid=70001,
+                ppid=99999,
+                name="pycharm64.exe",
+                exe=r"D:\Develop-Data\pycharm\PyCharm 2024.1\bin\pycharm64.exe",
+                cmdline=[r"D:\Develop-Data\pycharm\PyCharm 2024.1\bin\pycharm64.exe"],
+            )
+        ]
+
+    monkeypatch.setattr(psutil, "process_iter", _fake_process_iter)
+
+    process_name, process_pid, source = desktop._find_matching_process_from_pid_candidates(
+        "PyCharm 2024.1",
+        pid_candidates={41528, 2480, 43096},
+        baseline_pids={1, 2, 3},
+        attempts=1,
+    )
+
+    assert process_name
+    assert process_pid == 70001
+    assert source == "process_scan"

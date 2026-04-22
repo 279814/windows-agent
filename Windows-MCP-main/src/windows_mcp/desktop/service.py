@@ -278,6 +278,27 @@ class Desktop:
         baseline_pids = baseline_pids or set()
         if not expected_targets:
             return None, None, "no_expected_target"
+        jetbrains_targets = {
+            "jetbrains",
+            "pycharm",
+            "pycharm64",
+            "idea",
+            "idea64",
+            "intellij",
+            "webstorm",
+            "webstorm64",
+            "goland",
+            "goland64",
+            "clion",
+            "clion64",
+            "datagrip",
+            "datagrip64",
+            "rubymine",
+            "rubymine64",
+            "phpstorm",
+            "phpstorm64",
+        }
+        jetbrains_expected = bool(expected_targets.intersection(jetbrains_targets))
 
         tracked_roots = {pid for pid in pid_candidates if pid > 0}
         for attempt in range(max(1, attempts)):
@@ -316,6 +337,8 @@ class Desktop:
                         if ppid in tracked_roots or tracked_roots.intersection(self._iter_related_pids(ppid)):
                             return process_label or str(pid), pid, "process_scan"
                         if tracked_roots and pid in expanded_candidates:
+                            return process_label or str(pid), pid, "process_scan"
+                        if jetbrains_expected:
                             return process_label or str(pid), pid, "process_scan"
             except Exception:
                 continue
@@ -1170,6 +1193,10 @@ class Desktop:
 
             response, status, pid = result
             launch_results.append(response)
+            extracted_pids = self._extract_pid_candidates(response)
+            for observed_pid in list(extracted_pids) + ([pid] if pid > 0 else []):
+                if observed_pid > 0 and observed_pid not in observed_pids:
+                    observed_pids.append(observed_pid)
             if status == 0:
                 verified = _verify_and_return(response, pid, f"{kind}:{candidate}")
                 if verified is not None:
@@ -1184,6 +1211,10 @@ class Desktop:
                 continue
             response, status, pid = result
             launch_results.append(response)
+            extracted_pids = self._extract_pid_candidates(response)
+            for observed_pid in list(extracted_pids) + ([pid] if pid > 0 else []):
+                if observed_pid > 0 and observed_pid not in observed_pids:
+                    observed_pids.append(observed_pid)
             if status == 0:
                 verified = _verify_and_return(response, pid, f"scan:{path}")
                 if verified is not None:
@@ -1197,8 +1228,8 @@ class Desktop:
             known_pids=observed_pids,
             baseline_handles=baseline_handles,
             baseline_pids=baseline_pids,
-            attempts=6 if observed_pids else 5,
-            delay_seconds=0.5,
+            attempts=8 if observed_pids else 5,
+            delay_seconds=0.6,
         )
         if launch_verification_name is not None:
             detail = (
