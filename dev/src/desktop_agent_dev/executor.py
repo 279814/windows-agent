@@ -444,7 +444,7 @@ class Executor:
 
     def launch_app(self, name: str) -> InputResult:
         if self._backend is None:
-            return self._result("window_launch", f"launch:{name}", tool="window_launch")
+            return self._result("input_launch_app", f"launch:{name}", tool="input_launch_app")
 
         if hasattr(self._backend, "launch_app"):
             before_state = None
@@ -479,9 +479,7 @@ class Executor:
                 after_state = None
 
             ok_flag = bool(launched and (detected or pid is not None or response_text))
-            detail = str(response_text)
-            if not ok_flag and status not in (None, 0):
-                detail = str(response_text)
+            detail = f"launched:{name}" if ok_flag else f"launch failed:{name}"
             payload = {
                 "name": name,
                 "backend_response": response,
@@ -491,7 +489,7 @@ class Executor:
                 "after_window_count": len(after_state) if isinstance(after_state, list) else None,
                 "window_detected": detected,
             }
-            return InputResult(ok=ok_flag, detail=detail, payload=payload, tool="window_launch")
+            return InputResult(ok=ok_flag, detail=detail, payload=payload, tool="input_launch_app")
 
         raise ExecutorError("Backend does not expose launch_app().")
 
@@ -844,7 +842,7 @@ class Executor:
             loc = (x, y) if x is not None and y is not None else None
             size = (width, height) if width is not None and height is not None else None
             reason = None
-            attempted_restore = False
+            attempted_restore = before_status in {"minimized", "maximized"}
             original_status = before_status
             if before_status == "minimized":
                 restore_app = getattr(self._backend, "restore_app", None)
@@ -895,7 +893,6 @@ class Executor:
                 reason = original_status
                 restore_app = getattr(self._backend, "restore_app", None)
                 if callable(restore_app):
-                    attempted_restore = True
                     try:
                         restore_app(name=name)
                     except Exception:

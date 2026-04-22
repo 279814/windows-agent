@@ -106,7 +106,10 @@ def test_executor_uses_backend_for_input() -> None:
     assert close_result.payload is not None
     assert close_result.payload["post_close_verified"] is True
     assert executor.resize_window(name="main", width=100, height=200).detail == "resize:main"
-    assert executor.launch_app("calc").detail == "launch:calc"
+    launch_result = executor.launch_app("calc")
+    assert launch_result.action == "input_launch_app"
+    assert launch_result.ok is True
+    assert launch_result.detail == "launch:calc"
 
     call_names = [name for name, _, _ in backend.calls]
     assert call_names == [
