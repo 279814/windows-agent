@@ -21,6 +21,10 @@ class TreeNodeInfo:
     control_type: str
     bounds: tuple[int, int, int, int] | None = None
     automation_id: str | None = None
+    class_name: str | None = None
+    role: str | None = None
+    process_id: int | None = None
+    window_title: str | None = None
     source: str = "stub"
 
 
@@ -103,6 +107,10 @@ class Perception:
                     control_type=getattr(node, "control_type", ""),
                     bounds=bounds,
                     automation_id=getattr(node, "automation_id", None),
+                    class_name=getattr(node, "class_name", None),
+                    role=getattr(node, "role", None),
+                    process_id=getattr(node, "process_id", None),
+                    window_title=getattr(node, "window_title", None),
                     source="windows-mcp",
                 )
             )

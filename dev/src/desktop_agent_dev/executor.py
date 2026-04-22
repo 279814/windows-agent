@@ -49,6 +49,10 @@ class Executor:
                             "type": getattr(node, "control_type", "unknown") or "unknown",
                             "name": getattr(node, "name", None),
                             "automation_id": getattr(node, "automation_id", None),
+                            "class_name": getattr(node, "class_name", None),
+                            "role": getattr(node, "role", None),
+                            "process_id": getattr(node, "process_id", None),
+                            "window_title": getattr(node, "window_title", None),
                             "found": True,
                             "confidence": 0.9,
                         })
@@ -78,6 +82,10 @@ class Executor:
                             "type": getattr(node, "control_type", "unknown") or "unknown",
                             "name": getattr(node, "name", None),
                             "automation_id": getattr(node, "automation_id", None),
+                            "class_name": getattr(node, "class_name", None),
+                            "role": getattr(node, "role", None),
+                            "process_id": getattr(node, "process_id", None),
+                            "window_title": getattr(node, "window_title", None),
                             "found": True,
                             "confidence": 0.8,
                         }

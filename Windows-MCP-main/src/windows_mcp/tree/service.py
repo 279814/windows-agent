@@ -404,6 +404,14 @@ class Tree:
 
                             metadata:dict[str,Any]={}
                             metadata['has_focused']=is_focused
+                            metadata['class_name']=getattr(node, 'CachedClassName', None)
+                            metadata['process_id']=getattr(node, 'ProcessId', None)
+                            metadata['window_title']=window_name
+                            try:
+                                role = node.GetCachedPropertyValue(PropertyId.LegacyIAccessibleRoleProperty)
+                                metadata['role']=AccessibleRoleNames.get(role, 'Default')
+                            except Exception:
+                                metadata['role']=None
                             if accelerator_key:
                                 metadata['shortcut']=accelerator_key
                             
