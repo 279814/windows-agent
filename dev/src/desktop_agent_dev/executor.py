@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 import os
 import re
+import subprocess
+import time
 from typing import Any
 
 
@@ -22,6 +24,18 @@ class InputResult:
 
 class Executor:
     """Desktop execution facade with real Windows-MCP backend support."""
+
+    _SHORTCUT_NOISE_PATTERNS = (
+        r"\s*-\s*快捷方式$",
+        r"\s*快捷方式$",
+        r"\s*-\s*shortcut$",
+        r"\s*shortcut$",
+    )
+    _VERSION_TAIL_PATTERNS = (
+        r"\s+v?\d{4}(?:\.\d+){0,3}$",
+        r"\s+v?\d+(?:\.\d+){1,3}$",
+        r"\s+(?:version|ver)\.?\s*\d+(?:\.\d+){0,3}$",
+    )
 
     def __init__(self, backend: Any | None = None) -> None:
         self._backend = backend
@@ -47,34 +61,86 @@ class Executor:
         return result
 
     @staticmethod
-    def _canonical_launch_name(value: str) -> str:
+    def _strip_launch_noise(value: str) -> str:
         try:
             basename = PureWindowsPath(value).name
         except Exception:
             basename = value
-        basename = basename.strip().lower()
-        for suffix in (".exe", ".lnk", ".url"):
-            if basename.endswith(suffix):
-                basename = basename[: -len(suffix)]
-                break
+        basename = basename.strip()
+        previous = None
+        while basename and basename != previous:
+            previous = basename
+            for pattern in Executor._SHORTCUT_NOISE_PATTERNS:
+                basename = re.sub(pattern, "", basename, flags=re.IGNORECASE)
+            for suffix in (".lnk", ".url", ".exe"):
+                if basename.lower().endswith(suffix):
+                    basename = basename[: -len(suffix)].rstrip()
+        basename = re.sub(r"\s+", " ", basename)
+        return basename.strip()
+
+    @classmethod
+    def _canonical_launch_name(cls, value: str) -> str:
+        basename = cls._strip_launch_noise(value).lower()
         basename = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", basename)
         return re.sub(r"\s+", " ", basename).strip()
 
-    def _discover_launch_path(self, requested_target: str, alias_map: dict[str, list[str]]) -> tuple[str | None, dict[str, Any] | None]:
-        normalized_requested = self._canonical_launch_name(requested_target)
-        if not normalized_requested:
-            return None, None
+    @classmethod
+    def _launch_name_variants(cls, value: str) -> list[str]:
+        raw = cls._strip_launch_noise(value)
+        variants: list[str] = []
+        seen: set[str] = set()
 
-        expected_names = {normalized_requested}
-        for alias in alias_map.get(normalized_requested, []):
-            expected_names.add(self._canonical_launch_name(alias))
-        expected_names = {item for item in expected_names if item}
+        def _add(candidate: str) -> None:
+            normalized = cls._canonical_launch_name(candidate)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                variants.append(normalized)
+
+        _add(value)
+        _add(raw)
+        for pattern in cls._VERSION_TAIL_PATTERNS:
+            shortened = re.sub(pattern, "", raw, flags=re.IGNORECASE).strip()
+            if shortened and shortened != raw:
+                _add(shortened)
+        return variants
+
+    @staticmethod
+    def _resolve_shortcut_target(path: Path) -> str | None:
+        if path.suffix.lower() != ".lnk":
+            return str(path)
+        try:
+            script = (
+                "$shell = New-Object -ComObject WScript.Shell; "
+                f"$shortcut = $shell.CreateShortcut('{str(path).replace(\"'\", \"''\")}'); "
+                "if ($shortcut.TargetPath) { Write-Output $shortcut.TargetPath }"
+            )
+            completed = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except Exception:
+            return None
+        target = (completed.stdout or "").strip()
+        if not target:
+            return None
+        return target if Path(target).exists() else None
+
+    def _discover_launch_path(self, requested_target: str, alias_map: dict[str, list[str]]) -> tuple[str | None, dict[str, Any] | None]:
+        expected_names: set[str] = set(self._launch_name_variants(requested_target))
+        for variant in list(expected_names):
+            for alias in alias_map.get(variant, []):
+                expected_names.update(self._launch_name_variants(alias))
+        if not expected_names:
+            return None, None
 
         search_dirs = self._launch_search_dirs()
         if not search_dirs:
             return None, None
 
-        discovered: list[tuple[int, str, Path]] = []
+        discovered: list[tuple[int, int, str, Path, str | None]] = []
         for base_dir in search_dirs:
             try:
                 for path in base_dir.rglob("*"):
@@ -82,31 +148,50 @@ class Executor:
                         continue
                     if path.suffix.lower() not in {".lnk", ".exe", ".url"}:
                         continue
-                    candidate_name = self._canonical_launch_name(path.name)
-                    if not candidate_name:
+                    candidate_variants = set(self._launch_name_variants(path.name))
+                    shortcut_target = self._resolve_shortcut_target(path) if path.suffix.lower() == ".lnk" else str(path)
+                    if shortcut_target:
+                        candidate_variants.update(self._launch_name_variants(shortcut_target))
+                    if not candidate_variants:
                         continue
-                    if candidate_name in expected_names:
+                    if candidate_variants.intersection(expected_names):
                         score = 0
-                    elif any(candidate_name.startswith(f"{expected} ") or candidate_name.endswith(f" {expected}") for expected in expected_names):
+                    elif any(
+                        candidate.startswith(f"{expected} ") or candidate.endswith(f" {expected}")
+                        for candidate in candidate_variants
+                        for expected in expected_names
+                    ):
                         score = 1
                     else:
                         continue
-                    discovered.append((score, len(str(path)), path))
+                    resolved_target = shortcut_target if shortcut_target and Path(shortcut_target).exists() else None
+                    target_bonus = 0 if resolved_target else 1
+                    discovered.append((score, target_bonus, len(str(path)), path, resolved_target))
             except Exception:
                 continue
 
         if not discovered:
             return None, None
 
-        discovered.sort(key=lambda item: (item[0], item[1], item[2].name.lower()))
-        best_path = discovered[0][2]
+        discovered.sort(key=lambda item: (item[0], item[1], item[2], item[3].name.lower()))
+        best_path = discovered[0][3]
+        resolved_target = discovered[0][4]
         discovery = {
             "source": "desktop_shortcut" if best_path.suffix.lower() in {".lnk", ".url"} else "desktop_executable",
             "path": str(best_path),
             "display_name": best_path.stem,
+            "resolved_target_path": resolved_target,
+            "target_path_verified": bool(resolved_target),
             "search_roots": [str(item) for item in search_dirs],
         }
-        return str(best_path), discovery
+        return (resolved_target or str(best_path)), discovery
+
+    def _snapshot_launch_state(self) -> tuple[Any | None, list[Any] | None]:
+        try:
+            state = self._backend.get_state(use_vision=False, as_bytes=False)
+        except Exception:
+            return None, None
+        return getattr(state, "active_window", None), getattr(state, "windows", None)
 
     def _hit_test_element(self, x: int, y: int) -> dict[str, Any]:
         backend = self._backend
@@ -539,8 +624,9 @@ class Executor:
                 "paint": ["mspaint.exe"],
             }
             requested_target = name.strip()
-            normalized_key = requested_target.lower()
-            matched_target = alias_map.get(normalized_key, [requested_target])[0]
+            request_variants = self._launch_name_variants(requested_target)
+            normalized_key = request_variants[0] if request_variants else requested_target.lower()
+            matched_target = alias_map.get(normalized_key, [self._strip_launch_noise(requested_target) or requested_target])[0]
             discovered_target, discovery = self._discover_launch_path(requested_target, alias_map)
             effective_target = discovered_target or matched_target
             resolved_alias = effective_target if effective_target != requested_target else None
@@ -555,35 +641,22 @@ class Executor:
                 "calc.exe": {"mpicalc"},
             }
 
-            def _canonical_target(value: str) -> str:
-                try:
-                    basename = PureWindowsPath(value).name
-                except Exception:
-                    basename = value
-                if basename.lower().endswith(".exe"):
-                    return basename[:-4].lower()
-                return basename.lower()
-
             def _normalized_text(value: Any) -> str:
                 text = str(value or "").strip().lower()
                 text = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", text)
                 return re.sub(r"\s+", " ", text).strip()
 
-            expected_targets = {
-                _canonical_target(requested_target),
-                _canonical_target(matched_target),
-                _canonical_target(effective_target),
-            }
-            expected_phrases = {
-                _normalized_text(requested_target),
-                _normalized_text(matched_target),
-                _normalized_text(effective_target),
-            }
+            expected_targets = set(self._launch_name_variants(requested_target))
+            expected_targets.update(self._launch_name_variants(matched_target))
+            expected_targets.update(self._launch_name_variants(effective_target))
+            expected_phrases = {_normalized_text(item) for item in expected_targets}
             for alias in verification_aliases.get(matched_target.lower(), []):
-                expected_targets.add(_canonical_target(alias))
-                expected_phrases.add(_normalized_text(alias))
+                expected_targets.update(self._launch_name_variants(alias))
             if discovery is not None:
-                expected_phrases.add(_normalized_text(discovery.get("display_name")))
+                expected_targets.update(self._launch_name_variants(discovery.get("display_name") or ""))
+                expected_targets.update(self._launch_name_variants(discovery.get("resolved_target_path") or ""))
+
+            expected_phrases.update({_normalized_text(item) for item in expected_targets})
 
             expected_targets = {item for item in expected_targets if item}
             expected_phrases = {item for item in expected_phrases if item}
@@ -601,10 +674,10 @@ class Executor:
                 normalized_candidate = _normalized_text(candidate)
                 if not normalized_candidate:
                     return False
-                candidate_target = _canonical_target(str(candidate))
-                if candidate_target in blacklisted_targets:
+                candidate_targets = set(self._launch_name_variants(str(candidate)))
+                if candidate_targets.intersection(blacklisted_targets):
                     return False
-                if candidate_target in expected_targets:
+                if candidate_targets.intersection(expected_targets):
                     return True
                 candidate_words = normalized_candidate.split()
                 if set(candidate_words).intersection(expected_targets):
@@ -625,8 +698,7 @@ class Executor:
             before_state = None
             after_state = None
             try:
-                state = self._backend.get_state(use_vision=False, as_bytes=False)
-                before_state = getattr(state, "windows", None)
+                _, before_state = self._snapshot_launch_state()
             except Exception:
                 before_state = None
 
@@ -638,24 +710,37 @@ class Executor:
             verification_hint = _extract_verification_hint(response_text)
             detected = False
             detected_name = None
+            verification_attempts: list[dict[str, Any]] = []
+            poll_attempt_count = 1 if (pid is not None and pid > 0 and launched) else 4
             try:
-                state_after = self._backend.get_state(use_vision=False, as_bytes=False)
-                after_state = getattr(state_after, "windows", None)
-                before_count = len(before_state) if isinstance(before_state, list) else None
-                after_count = len(after_state) if isinstance(after_state, list) else None
-                window_count_increased = bool(before_count is not None and after_count is not None and after_count > before_count)
-                detected = window_count_increased
-                active_after = getattr(state_after, "active_window", None)
-                if isinstance(active_after, dict):
-                    current_name = active_after.get("name") or active_after.get("window_title")
-                    detected_name = current_name
-                    if _matches_expected(current_name):
-                        detected = True
-                elif active_after is not None:
-                    current_name = getattr(active_after, "name", None) or getattr(active_after, "window_title", None)
-                    detected_name = current_name
-                    if _matches_expected(current_name):
-                        detected = True
+                for attempt in range(poll_attempt_count):
+                    if attempt > 0:
+                        time.sleep(0.35)
+                    active_after, current_windows = self._snapshot_launch_state()
+                    after_state = current_windows
+                    before_count = len(before_state) if isinstance(before_state, list) else None
+                    after_count = len(after_state) if isinstance(after_state, list) else None
+                    window_count_increased = bool(before_count is not None and after_count is not None and after_count > before_count)
+                    current_name = None
+                    if isinstance(active_after, dict):
+                        current_name = active_after.get("name") or active_after.get("window_title")
+                    elif active_after is not None:
+                        current_name = getattr(active_after, "name", None) or getattr(active_after, "window_title", None)
+
+                    matched_this_attempt = _matches_expected(current_name)
+                    verification_attempts.append(
+                        {
+                            "attempt": attempt + 1,
+                            "window_count_increased": window_count_increased,
+                            "detected_window_name": current_name,
+                            "target_matches": matched_this_attempt,
+                        }
+                    )
+                    if current_name:
+                        detected_name = current_name
+                    detected = bool(detected or window_count_increased or matched_this_attempt)
+                    if matched_this_attempt:
+                        break
             except Exception:
                 after_state = None
 
@@ -665,13 +750,14 @@ class Executor:
                 for candidate in (detected_name, verification_hint)
                 if candidate is not None and str(candidate).strip() and not _matches_expected(candidate)
             ]
+            backend_failed_but_verified = bool((status not in (None, 0) or not pid) and target_matches)
             verification_evidence = bool(
                 target_matches
                 or detected
                 or (pid is not None and pid > 0)
                 or (response_text is not None and str(response_text).strip())
             )
-            verification_ok = bool(launched and target_matches)
+            verification_ok = bool((launched and target_matches) or backend_failed_but_verified)
             mismatch_detected = bool(launched and not verification_ok and mismatch_signals)
             partial_ok = bool(launched and not verification_ok and not mismatch_detected and verification_evidence)
             verification_status = (
@@ -704,6 +790,7 @@ class Executor:
                 "window_detected": detected,
                 "detected_window_name": detected_name,
                 "verification_hint": verification_hint,
+                "verification_attempts": verification_attempts,
                 "target_matches": target_matches,
                 "verification_status": verification_status,
                 "result_code": result_code,

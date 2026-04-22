@@ -243,6 +243,32 @@ class FakeMpicalcBackend(FakeExecBackend):
         return (f"Launched {name} without PID confirmation, but window appeared. [verification=name:{wrong_window.name}]", 0, 17000)
 
 
+class FakeDelayedVerifiedLaunchBackend(FakeExecBackend):
+    def __init__(self, requested_name: str, detected_name: str, status: int = 1, pid: int = 0) -> None:
+        super().__init__()
+        self.requested_name = requested_name
+        self.detected_name = detected_name
+        self.status = status
+        self.pid = pid
+        self.state_reads = 0
+        self._before = self._state
+        self._after = FakeDesktopState(
+            FakeWindowState(name=detected_name, handle=102, status="normal"),
+            windows=list(self._state.windows) + [FakeWindowState(name=detected_name, handle=102, status="normal")],
+        )
+
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        self.calls.append(("launch_app", (name,), {}))
+        return (f"Launch returned pending for {name}. [verification=name:{self.detected_name}]", self.status, self.pid)
+
+    def get_state(self, use_vision: bool = False, as_bytes: bool = False) -> FakeDesktopState:
+        self.state_reads += 1
+        if self.state_reads >= 3:
+            self._state = self._after
+            return self._after
+        return self._before
+
+
 def test_executor_close_window_marks_backend_failure_as_not_ok() -> None:
     backend = FakeFailBackend()
     executor = Executor(backend=backend)
@@ -404,3 +430,72 @@ def test_executor_launch_app_prefers_desktop_executable_for_third_party_app(tmp_
     assert result.payload["effective_target"] == str(exe_path)
     assert result.payload["discovery"]["source"] == "desktop_executable"
     assert backend.calls[-1][1] == (str(exe_path),)
+
+
+def test_executor_launch_app_recovers_when_backend_has_no_pid_but_window_appears() -> None:
+    backend = FakeDelayedVerifiedLaunchBackend(requested_name="微信", detected_name="微信", status=1, pid=0)
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("微信")
+
+    assert result.ok is True
+    assert result.detail == "launched:微信"
+    assert result.payload is not None
+    assert result.payload["status"] == 1
+    assert result.payload["pid"] == 0
+    assert result.payload["window_detected"] is True
+    assert result.payload["detected_window_name"] == "微信"
+    assert result.payload["target_matches"] is True
+    assert result.payload["verification_status"] == "success"
+    assert result.payload["result_code"] == "OK"
+    assert len(result.payload["verification_attempts"]) >= 2
+
+
+def test_executor_launch_app_strips_shortcut_noise_for_desktop_shortcut(tmp_path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    desktop_dir = home_dir / "Desktop"
+    desktop_dir.mkdir(parents=True)
+    shortcut_path = desktop_dir / "Steam.lnk"
+    shortcut_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("USERPROFILE", str(home_dir))
+    monkeypatch.delenv("OneDrive", raising=False)
+    monkeypatch.setenv("PUBLIC", str(tmp_path / "public"))
+
+    backend = FakeExecBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("steam.exe - 快捷方式")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["matched_target"] == "steam"
+    assert result.payload["effective_target"] == str(shortcut_path)
+    assert result.payload["discovery"]["display_name"] == "Steam"
+    assert backend.calls[-1][1] == (str(shortcut_path),)
+
+
+def test_executor_launch_app_matches_versioned_name_via_base_product_name(tmp_path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    desktop_dir = home_dir / "Desktop"
+    desktop_dir.mkdir(parents=True)
+    shortcut_path = desktop_dir / "PyCharm.lnk"
+    shortcut_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("USERPROFILE", str(home_dir))
+    monkeypatch.delenv("OneDrive", raising=False)
+    monkeypatch.setenv("PUBLIC", str(tmp_path / "public"))
+
+    backend = FakeExecBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("PyCharm 2024.1")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["matched_target"] == "PyCharm 2024.1"
+    assert result.payload["effective_target"] == str(shortcut_path)
+    assert result.payload["discovery"]["display_name"] == "PyCharm"
+    assert backend.calls[-1][1] == (str(shortcut_path),)
