@@ -297,6 +297,28 @@ def test_executor_launch_app_maps_explorer_alias_and_reports_verification() -> N
     assert backend.calls[-1][1] == ("explorer.exe",)
 
 
+def test_executor_launch_app_maps_notepad_and_mspaint_aliases() -> None:
+    cases = [
+        ("notepad", "notepad.exe", "desktop-agent-dev input_type smoke - Notepad"),
+        ("mspaint", "mspaint.exe", "Paint"),
+    ]
+
+    for requested_name, expected_target, expected_window in cases:
+        backend = FakeExecBackend()
+        executor = Executor(backend=backend)
+
+        result = executor.launch_app(requested_name)
+
+        assert result.ok is True
+        assert result.payload is not None
+        assert result.payload["requested_target"] == requested_name
+        assert result.payload["matched_target"] == expected_target
+        assert result.payload["verification_status"] == "success"
+        assert result.payload["result_code"] == "OK"
+        assert result.payload["detected_window_name"] == expected_window
+        assert backend.calls[-1][1] == (expected_target,)
+
+
 def test_executor_launch_app_reports_target_mismatch() -> None:
     backend = FakeLaunchMismatchBackend()
     executor = Executor(backend=backend)

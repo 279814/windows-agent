@@ -4,6 +4,7 @@ import asyncio
 
 from mcp import ClientSession, StdioServerParameters, stdio_client
 
+from desktop_agent_dev.executor import Executor
 from desktop_agent_dev.mcp_server import create_server
 
 
@@ -35,6 +36,61 @@ def test_server_registers_window_tools() -> None:
     server = create_server()
     assert server.services.executor.switch_window("main").tool == "window_switch"
     assert server.services.executor.resize_window(name="main", width=100, height=200).tool == "window_resize"
+
+
+class _LaunchState:
+    def __init__(self, active_window: object | None, windows: list[object] | None = None) -> None:
+        self.active_window = active_window
+        self.windows = windows or ([active_window] if active_window is not None else [])
+
+
+class _LaunchWindow:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.window_title = name
+
+
+class _LaunchBackend:
+    def __init__(self, detected_name: str, pid: int = 4242) -> None:
+        self.detected_name = detected_name
+        self.pid = pid
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self._state = _LaunchState(_LaunchWindow("main"), windows=[_LaunchWindow("main")])
+
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        self.calls.append(("launch_app", (name,), {}))
+        launched = _LaunchWindow(self.detected_name)
+        windows = list(self._state.windows)
+        windows.append(launched)
+        self._state = _LaunchState(launched, windows=windows)
+        return (f"Launched {name}. [verification=name:{self.detected_name}]", 0, self.pid)
+
+    def get_state(self, use_vision: bool = False, as_bytes: bool = False) -> _LaunchState:
+        return self._state
+
+
+def test_input_launch_app_tool_aligns_top_level_ok_on_success() -> None:
+    server = create_server()
+    server.services.executor = Executor(backend=_LaunchBackend("File Explorer"))
+
+    result = server.tool_registry.specs["input_launch_app"].executor(name="explorer")
+
+    assert result["ok"] is True
+    assert result["data"]["ok"] is True
+    assert result["data"]["payload"]["verification_status"] == "success"
+
+
+def test_input_launch_app_tool_aligns_top_level_ok_on_target_mismatch() -> None:
+    server = create_server()
+    server.services.executor = Executor(backend=_LaunchBackend("C:\\Program Files\\Git\\usr\\bin\\mpicalc.exe"))
+
+    result = server.tool_registry.specs["input_launch_app"].executor(name="calc")
+
+    assert result["ok"] is False
+    assert result["data"]["ok"] is False
+    assert result["message"] == "target mismatch:calc->C:\\Program Files\\Git\\usr\\bin\\mpicalc.exe"
+    assert result["data"]["payload"]["verification_status"] == "target_mismatch"
+    assert result["data"]["payload"]["result_code"] == "TARGET_MISMATCH"
 
 
 async def _mcp_smoke_chain() -> dict[str, object]:
