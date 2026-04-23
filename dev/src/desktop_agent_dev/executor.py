@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 import os
@@ -39,6 +40,7 @@ class Executor:
 
     def __init__(self, backend: Any | None = None) -> None:
         self._backend = backend
+        self._window_history: list[dict[str, Any]] = []
 
     def _result(self, action: str, detail: str, ok: bool = True, payload: dict[str, Any] | None = None, tool: str | None = None) -> InputResult:
         return InputResult(action=action, ok=ok, detail=detail, payload=payload, tool=tool or action)
@@ -245,6 +247,28 @@ class Executor:
         if coerced is None:
             return False
         return coerced["left"] <= x <= coerced["right"] and coerced["top"] <= y <= coerced["bottom"]
+
+    def _window_history_key(self, snapshot: dict[str, Any] | None) -> tuple[Any, Any, Any] | None:
+        if snapshot is None:
+            return None
+        return (
+            snapshot.get("handle"),
+            snapshot.get("pid"),
+            self._normalize_window_name(snapshot.get("name") or snapshot.get("window_title")),
+        )
+
+    def _remember_window_snapshots(self, windows: list[dict[str, Any]]) -> None:
+        for snapshot in windows:
+            key = self._window_history_key(snapshot)
+            if key is None:
+                continue
+            self._window_history = [item for item in self._window_history if self._window_history_key(item) != key]
+            self._window_history.insert(0, dict(snapshot))
+        if len(self._window_history) > 64:
+            self._window_history = self._window_history[:64]
+
+    def _snapshot_windows_from_history(self) -> list[dict[str, Any]]:
+        return [dict(snapshot) for snapshot in self._window_history]
 
     def _serialize_control(self, control: Any) -> dict[str, Any] | None:
         if control is None:
@@ -923,11 +947,18 @@ class Executor:
             new_matching_windows = [window for window in after_matching_windows if window.get("handle") not in before_handles]
             new_instance_detected = bool(new_matching_windows or len(after_matching_windows) > len(before_matching_windows))
 
+            matched_window_name = None
+            if new_matching_windows:
+                matched_window_name = new_matching_windows[0].get("name") or new_matching_windows[0].get("window_title")
+            elif after_matching_windows:
+                matched_window_name = after_matching_windows[0].get("name") or after_matching_windows[0].get("window_title")
+
             backend_verification_matches = _matches_expected(verification_hint)
-            target_matches = _matches_expected(detected_name) or backend_verification_matches
+            resolved_detected_name = matched_window_name or (verification_hint if backend_verification_matches else detected_name)
+            target_matches = _matches_expected(resolved_detected_name) or backend_verification_matches
             mismatch_signals = [
                 candidate
-                for candidate in (detected_name, None if backend_verification_matches else verification_hint)
+                for candidate in (resolved_detected_name, None if backend_verification_matches else verification_hint)
                 if candidate is not None and str(candidate).strip() and not _matches_expected(candidate)
             ]
             backend_failed_but_verified = bool((status not in (None, 0) or not pid) and target_matches)
@@ -954,7 +985,7 @@ class Executor:
             detail = (
                 f"launched:{name}"
                 if verification_ok
-                else (f"launch pending verification:{name}" if partial_ok else (f"launch failed:{name}" if not launched else f"target mismatch:{name}->{detected_name}"))
+                else (f"launch pending verification:{name}" if partial_ok else (f"launch failed:{name}" if not launched else f"target mismatch:{name}->{resolved_detected_name}"))
             )
             payload = {
                 "name": name,
@@ -974,9 +1005,10 @@ class Executor:
                 "new_instance_handles": [window.get("handle") for window in new_matching_windows if window.get("handle") is not None],
                 "new_instance_pids": [window.get("pid") for window in new_matching_windows if window.get("pid") is not None],
                 "window_detected": detected,
-                "detected_window_name": detected_name,
+                "detected_window_name": resolved_detected_name,
                 "verification_source": verification_source,
                 "verification_hint": verification_hint,
+                "matched_window_name": matched_window_name,
                 "verification_attempts": verification_attempts,
                 "target_matches": target_matches,
                 "verification_status": verification_status,
@@ -1078,11 +1110,71 @@ class Executor:
         for index in range(max(1, attempts)):
             visible = self._snapshot_windows(refresh=True)
             active = visible[0] if visible else None
-            target = self._find_window_snapshot(name=name, handle=handle, pid=pid, refresh=False, prefer_active=prefer_active)
+            target = self._find_window_snapshot(
+                name=name,
+                handle=handle,
+                pid=pid,
+                refresh=False,
+                prefer_active=prefer_active,
+                include_history=False,
+            )
             observations.append({"target": target, "active": active, "visible": visible})
             if index + 1 < attempts:
                 time.sleep(delay)
         return observations
+
+    def _user32(self) -> Any | None:
+        try:
+            return ctypes.windll.user32
+        except Exception:
+            return None
+
+    def _window_handle_exists(self, handle: int | None) -> bool:
+        if handle is None:
+            return False
+        user32 = self._user32()
+        if user32 is None:
+            return False
+        try:
+            return bool(user32.IsWindow(int(handle)))
+        except Exception:
+            return False
+
+    def _native_focus_window(self, handle: int | None) -> bool:
+        if handle is None:
+            return False
+        user32 = self._user32()
+        if user32 is None:
+            return False
+        try:
+            hwnd = int(handle)
+            if not user32.IsWindow(hwnd):
+                return False
+            if user32.IsIconic(hwnd):
+                user32.ShowWindow(hwnd, 9)
+            else:
+                user32.ShowWindow(hwnd, 5)
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            return True
+        except Exception:
+            return False
+
+    def _native_restore_window(self, handle: int | None) -> bool:
+        if handle is None:
+            return False
+        user32 = self._user32()
+        if user32 is None:
+            return False
+        try:
+            hwnd = int(handle)
+            if not user32.IsWindow(hwnd):
+                return False
+            user32.ShowWindow(hwnd, 9)
+            user32.BringWindowToTop(hwnd)
+            return True
+        except Exception:
+            return False
 
     def switch_window(self, name: str, handle: int | None = None, pid: int | None = None) -> InputResult:
         previous = self._snapshot_window(refresh=True)
@@ -1152,28 +1244,50 @@ class Executor:
 
         if hasattr(self._backend, "focus_app"):
             previous = self._snapshot_window(refresh=True)
+            visible_before = self._snapshot_windows(refresh=False)
             target_before, matched_by = self._resolve_target_window(name=name, handle=handle, pid=pid, refresh=True, prefer_active=True)
             target_label = (target_before or {}).get("name") or name
-            response = self._backend.focus_app(target_label)
-            detail, status = self._normalize_backend_response(response)
+            target_handle = handle or (target_before or {}).get("handle")
+            target_pid = pid or (target_before or {}).get("pid")
+            target_visible_before = bool(target_handle is not None and any(window.get("handle") == target_handle for window in visible_before))
+            restored_from_minimized = self._window_is_minimized(target_before)
+
+            response: Any
+            detail: str
+            status: int | None
+            strategy = "focus_app"
+            native_used = False
+            if target_handle is not None and (restored_from_minimized or not target_visible_before):
+                native_used = self._native_focus_window(target_handle)
+            if native_used:
+                detail = f"Focused {target_label or target_handle} via native handle fallback."
+                status = 0
+                response = (detail, 0)
+                strategy = "native_handle"
+            else:
+                response = self._backend.focus_app(target_label)
+                detail, status = self._normalize_backend_response(response)
+
             current, current_matched_by = self._resolve_target_window(
                 name=name,
-                handle=handle or (target_before or {}).get("handle"),
-                pid=pid or (target_before or {}).get("pid"),
+                handle=target_handle,
+                pid=target_pid,
                 refresh=True,
                 prefer_active=True,
             )
+            active_after = self._snapshot_window(refresh=True)
             verified = bool(
                 status in (None, 0)
                 and current
+                and active_after
                 and (
-                    self._window_same_target(current, target_before)
-                    or self._window_name_matches(current, name)
-                    or (handle is not None and current.get("handle") == handle)
-                    or (pid is not None and current.get("pid") == pid)
+                    self._window_same_target(active_after, current)
+                    or self._window_name_matches(active_after, name)
+                    or (target_handle is not None and active_after.get("handle") == target_handle)
+                    or (target_pid is not None and active_after.get("pid") == target_pid)
                 )
             )
-            return self._result(
+            result = self._result(
                 "window_focus",
                 detail,
                 ok=verified,
@@ -1184,16 +1298,27 @@ class Executor:
                     "previous_handle": previous.get("handle") if previous else None,
                     "current_window": current.get("name") if current else None,
                     "current_handle": current.get("handle") if current else None,
+                    "active_window_after": active_after,
                     "matched_by": current_matched_by or matched_by,
-                    "restored_from_minimized": self._window_is_minimized(target_before),
+                    "restored_from_minimized": restored_from_minimized,
                     "backend_response": response,
                     "backend_response_detail": detail,
                     "backend_response_code": status,
                     "verified": verified,
-                    "strategy": "focus_app",
+                    "strategy": strategy,
                 },
                 tool="window_focus",
             )
+
+            if not verified and strategy == "focus_app":
+                fallback = self.switch_window(name, handle=handle, pid=pid)
+                if fallback.payload is None:
+                    fallback.payload = {}
+                fallback.action = "window_focus"
+                fallback.tool = "window_focus"
+                fallback.payload["strategy"] = "switch_window"
+                return fallback
+            return result
 
         result = self.switch_window(name, handle=handle, pid=pid)
         if result.payload is None:
@@ -1440,6 +1565,7 @@ class Executor:
                     continue
                 seen.add(key)
                 windows.append(snapshot)
+            self._remember_window_snapshots(windows)
             return windows
         except Exception:
             return []
@@ -1458,29 +1584,42 @@ class Executor:
         pid: int | None = None,
         refresh: bool = False,
         prefer_active: bool = False,
+        include_history: bool = True,
     ) -> dict[str, Any] | None:
         windows = self._snapshot_windows(refresh=refresh)
-        if not windows:
+        cached_windows = self._snapshot_windows_from_history() if include_history else []
+        search_windows = list(windows)
+        for snapshot in cached_windows:
+            key = self._window_history_key(snapshot)
+            if key is None:
+                continue
+            if any(self._window_history_key(existing) == key for existing in search_windows):
+                continue
+            search_windows.append(snapshot)
+        if not search_windows:
             return None
 
         if handle is not None:
-            for snapshot in windows:
+            for snapshot in search_windows:
                 if snapshot.get("handle") == handle:
                     return snapshot
+            return None
 
         if pid is not None:
-            pid_matches = [snapshot for snapshot in windows if snapshot.get("pid") == pid]
+            pid_matches = [snapshot for snapshot in search_windows if snapshot.get("pid") == pid]
             if pid_matches:
-                if prefer_active and windows[0].get("pid") == pid:
+                if prefer_active and windows and windows[0].get("pid") == pid:
                     return windows[0]
                 return pid_matches[0]
+            if name is None:
+                return None
 
         if name is None:
-            return windows[0]
+            return windows[0] if windows else search_windows[0]
 
-        exact_matches = [snapshot for snapshot in windows if self._window_name_matches(snapshot, name)]
+        exact_matches = [snapshot for snapshot in search_windows if self._window_name_matches(snapshot, name)]
         if exact_matches:
-            if prefer_active and self._window_name_matches(windows[0], name):
+            if prefer_active and windows and self._window_name_matches(windows[0], name):
                 return windows[0]
             return exact_matches[0]
 
@@ -1710,7 +1849,11 @@ class Executor:
                 **self._window_payload(target_window=before.get("name") if before else name, before=before, after=after),
                 "verified": verified,
                 "verification_mode": verification_mode,
+                "target_instance_handle": target_handle,
+                "target_instance_pid": target_pid,
                 "target_handle_present_after": target_handle_present_after,
+                "target_window_after_matches_target": self._window_same_target(after, before),
+                "active_window_after_matches_target": self._window_same_target(active_after, before),
                 "active_window_after": active_after,
                 "backend_response": response,
                 "backend_response_detail": detail,
@@ -1792,18 +1935,42 @@ class Executor:
                 tool="window_restore",
             )
         if hasattr(self._backend, "restore_app"):
-            response = self._backend.restore_app(name=before.get("name") if before else name)
-            detail, status = self._normalize_backend_response(response)
-            after = self._find_window_snapshot(handle=handle or before.get("handle"), pid=pid or before.get("pid"), name=name, refresh=True)
-            if after is None:
-                after = self._snapshot_window(name, refresh=True, handle=handle or before.get("handle"), pid=pid or before.get("pid"), prefer_active=True)
-            verified = bool(status in (None, 0) and after and str(after.get("status", "")).lower() not in {"minimized", "maximized"})
+            target_handle = handle or before.get("handle")
+            target_pid = pid or before.get("pid")
+            response: Any
+            detail: str
+            status: int | None
+            strategy = "restore_app"
+            if target_handle is not None and self._native_restore_window(target_handle):
+                detail = f"Restored {before.get('name') if before else (name or target_handle)} window via native handle fallback."
+                status = 0
+                response = (detail, 0)
+                strategy = "native_handle"
+            else:
+                response = self._backend.restore_app(name=before.get("name") if before else name)
+                detail, status = self._normalize_backend_response(response)
+            observations = self._poll_window_observations(name=name, handle=target_handle, pid=target_pid, prefer_active=True, attempts=6, delay=0.12)
+            after = observations[-1]["target"] if observations else None
+            active_after = observations[-1]["active"] if observations else None
+            verified = bool(
+                status in (None, 0)
+                and after
+                and not self._window_is_minimized(after)
+                and not self._window_is_maximized(after)
+                and (
+                    active_after is None
+                    or self._window_same_target(active_after, after)
+                    or self._window_name_matches(active_after, name)
+                )
+            )
             payload = {
                 **self._window_payload(target_window=before.get("name") if before else name, before=before, after=after),
                 "verified": verified,
+                "active_window_after": active_after,
                 "backend_response": response,
                 "backend_response_detail": detail,
                 "backend_response_code": status,
+                "strategy": strategy,
             }
             detail = detail if verified else f"Restore verification failed for {before.get('name') if before else (name or 'active')}."
             return self._result("window_restore", detail, ok=verified, payload=payload, tool="window_restore")

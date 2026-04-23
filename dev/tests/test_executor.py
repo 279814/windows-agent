@@ -374,6 +374,20 @@ class FakeLocalizedCalcBackend(FakeExecBackend):
         return (f"Launched {name}. [verification=name:{localized_window.name}]", 0, 4243)
 
 
+class FakeBackgroundLaunchBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        active = FakeWindowState(name="*test.txt - Notepad", handle=12, status="normal", pid=1200)
+        self._state = FakeDesktopState(active, windows=[active])
+
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        self.calls.append(("launch_app", (name,), {}))
+        active = FakeWindowState(name="*test.txt - Notepad", handle=12, status="normal", pid=1200)
+        launched = FakeWindowState(name="计算器", handle=103, status="normal", pid=4243)
+        self._state = FakeDesktopState(active, windows=[active, launched])
+        return (f"Launched {name}. [verification=name:计算器]", 0, 4243)
+
+
 class FakeWindowLifecycleBackend(FakeExecBackend):
     def __init__(self, maximize_status: str = "normal", minimize_status: str = "normal", restore_status: str = "maximized") -> None:
         super().__init__()
@@ -496,6 +510,21 @@ class FakeVisibleFlagMinimizeBackend(FakeExecBackend):
         return ("计算器 minimized.", 0)
 
 
+class FakeHiddenCachedWindowBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        active = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        self._state = FakeDesktopState(active, windows=[active])
+
+    def focus_app(self, name: str) -> tuple[str, int]:
+        self.calls.append(("focus_app", (name,), {}))
+        return (f"Application {name} not found.", 1)
+
+    def restore_app(self, name: str | None = None) -> tuple[str, int]:
+        self.calls.append(("restore_app", (name,), {}))
+        return (f"Application {name} not found.", 1)
+
+
 class FakeDuplicateTitleCloseBackend(FakeExecBackend):
     def __init__(self) -> None:
         super().__init__()
@@ -582,6 +611,20 @@ def test_executor_launch_app_accepts_localized_window_name_for_calc() -> None:
     assert result.payload["detected_window_name"] == "计算器"
     assert result.payload["target_matches"] is True
     assert result.payload["verification_status"] == "success"
+
+
+def test_executor_launch_app_prefers_matched_window_name_over_unrelated_active_window() -> None:
+    backend = FakeBackgroundLaunchBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("calc")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["detected_window_name"] == "计算器"
+    assert result.payload["matched_window_name"] == "计算器"
+    assert result.payload["target_matches"] is True
+    assert result.payload["verification_attempts"][0]["detected_window_name"] == "*test.txt - Notepad"
 
 
 def test_executor_launch_app_maps_notepad_and_mspaint_aliases() -> None:
@@ -700,6 +743,41 @@ def test_executor_focus_window_reports_restored_from_target_state() -> None:
     assert result.payload["strategy"] in {"switch_window", "focus_app"}
 
 
+def test_executor_focus_window_uses_cached_hidden_handle_with_native_fallback() -> None:
+    backend = FakeHiddenCachedWindowBackend()
+    executor = Executor(backend=backend)
+    executor._remember_window_snapshots(
+        [
+            {
+                "name": "计算器",
+                "window_title": "计算器",
+                "status": "MINIMIZED",
+                "handle": 808,
+                "pid": 8808,
+                "bounds": [0, 0, 400, 600],
+                "is_visible": False,
+            }
+        ]
+    )
+
+    def reveal_for_focus(handle: int | None) -> bool:
+        assert handle == 808
+        target = FakeWindowState(name="计算器", handle=808, status="normal", pid=8808, is_visible=True)
+        other = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        backend._state = FakeDesktopState(target, windows=[target, other])
+        return True
+
+    executor._native_focus_window = reveal_for_focus  # type: ignore[method-assign]
+
+    result = executor.focus_window("计算器")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["strategy"] == "native_handle"
+    assert result.payload["current_handle"] == 808
+    assert result.payload["active_window_after"]["handle"] == 808
+
+
 def test_executor_minimize_accepts_hidden_target_handle_as_success() -> None:
     backend = FakeDuplicateTitleMinimizeBackend()
     executor = Executor(backend=backend)
@@ -710,7 +788,10 @@ def test_executor_minimize_accepts_hidden_target_handle_as_success() -> None:
     assert result.payload is not None
     assert result.payload["verified"] is True
     assert result.payload["verification_mode"] == "handle_hidden_after_minimize"
+    assert result.payload["target_instance_handle"] == 101
     assert result.payload["target_handle_present_after"] is False
+    assert result.payload["target_window_after_matches_target"] is False
+    assert result.payload["active_window_after_matches_target"] is False
     assert result.payload["active_window_after"]["handle"] == 202
 
 
@@ -736,6 +817,39 @@ def test_executor_minimize_accepts_invisible_target_as_success() -> None:
     assert result.payload is not None
     assert result.payload["verification_mode"] == "visibility_hidden_after_minimize"
     assert result.payload["active_window_after"]["name"] == "Codex"
+
+
+def test_executor_restore_window_uses_cached_hidden_handle_with_native_fallback() -> None:
+    backend = FakeHiddenCachedWindowBackend()
+    executor = Executor(backend=backend)
+    executor._remember_window_snapshots(
+        [
+            {
+                "name": "计算器",
+                "window_title": "计算器",
+                "status": "MINIMIZED",
+                "handle": 909,
+                "pid": 9909,
+                "bounds": [0, 0, 400, 600],
+                "is_visible": False,
+            }
+        ]
+    )
+
+    def reveal_for_restore(handle: int | None) -> bool:
+        assert handle == 909
+        target = FakeWindowState(name="计算器", handle=909, status="normal", pid=9909, is_visible=True)
+        backend._state = FakeDesktopState(target, windows=[target])
+        return True
+
+    executor._native_restore_window = reveal_for_restore  # type: ignore[method-assign]
+
+    result = executor.restore_window("计算器")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["strategy"] == "native_handle"
+    assert result.payload["after_handle"] == 909
 
 
 def test_executor_maximize_accepts_bounds_expansion_when_status_lags() -> None:

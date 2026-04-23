@@ -39,8 +39,14 @@ INPUT_LAUNCH_APP_OUTPUT_EXAMPLES = [
                 "pid": 17824,
                 "before_window_count": 6,
                 "after_window_count": 7,
+                "matching_instance_count_before": 0,
+                "matching_instance_count_after": 1,
+                "new_instance_detected": True,
+                "new_instance_handles": [3017860],
+                "new_instance_pids": [17824],
                 "window_detected": True,
                 "detected_window_name": "计算器",
+                "matched_window_name": "计算器",
                 "verification_source": "process",
                 "verification_hint": "calc.exe",
                 "verification_attempts": [
@@ -112,7 +118,20 @@ INPUT_MOVE_OUTPUT_EXAMPLES = [
             "action": "input_move",
             "ok": True,
             "detail": "moved:1000,600",
-            "payload": {},
+            "payload": {
+                "x": 1000,
+                "y": 600,
+                "element": {
+                    "type": "文档",
+                    "name": "文本编辑器",
+                    "class_name": "RichEditD2DPT",
+                    "semantic_role": "document",
+                    "window_title": "*test.txt - Notepad",
+                    "found": True,
+                    "confidence": 0.42,
+                    "source": "focused_control",
+                },
+            },
         },
         "error": None,
     }
@@ -127,7 +146,12 @@ INPUT_DRAG_OUTPUT_EXAMPLES = [
             "action": "input_drag",
             "ok": True,
             "detail": "dragged:900,525->1300,525",
-            "payload": {},
+            "payload": {
+                "start": {"x": 900, "y": 525},
+                "end": {"x": 1300, "y": 525},
+                "active_window_before": {"name": "*test.txt - Notepad"},
+                "active_window_after": {"name": "*test.txt - Notepad"},
+            },
         },
         "error": None,
     }
@@ -142,7 +166,13 @@ INPUT_MULTI_EDIT_OUTPUT_EXAMPLES = [
             "action": "input_multi_edit",
             "ok": True,
             "detail": "multi_edited:2",
-            "payload": {"count": 2},
+            "payload": {
+                "count": 2,
+                "items": [
+                    {"x": 1, "y": 2, "text": "a"},
+                    {"x": 3, "y": 4, "text": "b"},
+                ],
+            },
         },
         "error": None,
     }
@@ -157,7 +187,11 @@ INPUT_MULTI_SELECT_OUTPUT_EXAMPLES = [
             "action": "input_multi_select",
             "ok": True,
             "detail": "multi_selected:2:ctrl",
-            "payload": {"count": 2, "press_ctrl": True},
+            "payload": {
+                "count": 2,
+                "press_ctrl": True,
+                "targets": [{"x": 1, "y": 2}, {"x": 3, "y": 4}],
+            },
         },
         "error": None,
     }
@@ -194,7 +228,12 @@ INPUT_SCROLL_OUTPUT_EXAMPLES = [
             "action": "input_scroll",
             "ok": True,
             "detail": "scrolled:down:1",
-            "payload": {},
+            "payload": {
+                "direction": "down",
+                "amount": 1,
+                "target_window_before": {"name": "*test.txt - Notepad"},
+                "target_window_after": {"name": "*test.txt - Notepad"},
+            },
         },
         "error": None,
     }
