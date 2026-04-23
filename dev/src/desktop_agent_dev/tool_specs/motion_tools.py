@@ -48,11 +48,11 @@ def register_motion_tools(registry: ToolRegistry, services: Any) -> None:
         "additionalProperties": False,
     }
 
-    def motion_preview(kind: str, start_x: int, start_y: int, end_x: int, end_y: int, duration_ms: int | None = None, steps: int = 16, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0) -> dict[str, Any]:
+    def motion_preview(kind: str, start_x: int, start_y: int, end_x: int, end_y: int, duration_ms: int | None = None, steps: int = 16, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0, task_id: str | None = None) -> dict[str, Any]:
         if not services.safety.check("motion_preview"):
             return error("motion_preview", "blocked by safety gate")
         try:
-            result = services.executor.motion_preview(kind, (start_x, start_y), (end_x, end_y), duration_ms=duration_ms, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+            result = services.executor.motion_preview(kind, (start_x, start_y), (end_x, end_y), duration_ms=duration_ms, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel, task_id=task_id)
         except TypeError:
             result = services.executor.motion_preview(kind, (start_x, start_y), (end_x, end_y), duration_ms=duration_ms, steps=steps)
         response = ok("motion_preview", input_payload("motion_preview", result["ok"], result["detail"], {
@@ -70,6 +70,34 @@ def register_motion_tools(registry: ToolRegistry, services: Any) -> None:
             "path": result["path"],
             "metadata": result["metadata"],
             "overlay_state": result["overlay_state"],
+            "task_state": result.get("task_state"),
+        }))
+        response["ok"] = result["ok"]
+        return response
+
+    def motion_execute(kind: str, start_x: int, start_y: int, end_x: int, end_y: int, duration_ms: int | None = None, steps: int = 16, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0, task_id: str | None = None) -> dict[str, Any]:
+        if not services.safety.check("motion_execute"):
+            return error("motion_execute", "blocked by safety gate")
+        try:
+            result = services.executor.motion_execute(kind, (start_x, start_y), (end_x, end_y), duration_ms=duration_ms, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel, task_id=task_id)
+        except TypeError:
+            result = services.executor.motion_execute(kind, (start_x, start_y), (end_x, end_y), duration_ms=duration_ms, steps=steps)
+        response = ok("motion_execute", input_payload("motion_execute", result["ok"], result["detail"], {
+            "kind": kind,
+            "start": {"x": start_x, "y": start_y},
+            "end": {"x": end_x, "y": end_y},
+            "duration_ms": duration_ms or 180,
+            "steps": steps,
+            "hover_ms": hover_ms,
+            "jitter_px": jitter_px,
+            "accel": accel,
+            "decel": decel,
+            "phase": result["phase"],
+            "action": result["action"],
+            "path": result["path"],
+            "metadata": result["metadata"],
+            "overlay_state": result.get("overlay_state"),
+            "task_state": result.get("task_state"),
         }))
         response["ok"] = result["ok"]
         return response

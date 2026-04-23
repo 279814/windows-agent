@@ -9,8 +9,11 @@ import subprocess
 import time
 from typing import Any
 
-from .motion import MotionAction, MotionScheduler, MotionResult, MotionPhase
+from datetime import datetime, timezone
+
+from .motion import MotionAction, MotionScheduler, MotionResult, MotionPhase, MotionExecutionError
 from .overlay import OverlayRenderer
+from .state import TaskStore
 
 
 class ExecutorError(RuntimeError):
@@ -29,14 +32,36 @@ class InputResult:
 class Executor:
     """Desktop execution facade with real Windows-MCP backend support."""
 
-    def __init__(self, backend: Any | None = None, motion_scheduler: MotionScheduler | None = None, overlay_renderer: OverlayRenderer | None = None) -> None:
+    def __init__(self, backend: Any | None = None, motion_scheduler: MotionScheduler | None = None, overlay_renderer: OverlayRenderer | None = None, task_store: TaskStore | None = None) -> None:
         self._backend = backend
         self._window_history: list[dict[str, Any]] = []
         self._motion_scheduler = motion_scheduler or MotionScheduler()
         self._overlay_renderer = overlay_renderer or OverlayRenderer()
+        self._task_store = task_store or TaskStore()
 
     def _result(self, action: str, detail: str, ok: bool = True, payload: dict[str, Any] | None = None, tool: str | None = None) -> InputResult:
         return InputResult(action=action, ok=ok, detail=detail, payload=payload, tool=tool or action)
+
+    def _task_motion_event(self, *, kind: str, phase: MotionPhase, action: MotionAction | None = None, error_message: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "kind": kind,
+            "phase": phase.value,
+            "last_error": error_message,
+            "last_verified_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if action is not None:
+            payload["last_target"] = {"x": action.end.x, "y": action.end.y}
+            payload["duration_ms"] = action.duration_ms
+            payload["steps"] = action.metadata.get("steps")
+        return payload
+
+    def _update_task_state(self, task_id: str | None, *, action: dict[str, Any] | None = None, verified: bool = False, error_message: str | None = None) -> None:
+        if not task_id:
+            return
+        try:
+            self._task_store.advance(task_id, action=action, verified=verified, error_message=error_message)
+        except Exception:
+            pass
 
     def motion_preview(
         self,
@@ -49,11 +74,13 @@ class Executor:
         jitter_px: int = 0,
         accel: float = 1.0,
         decel: float = 1.0,
+        task_id: str | None = None,
     ) -> dict[str, Any]:
         action = self._motion_scheduler.plan(kind=kind, start=start, end=end, duration_ms=duration_ms, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
-        result = self._motion_scheduler.run(action, steps=steps)
+        result = self._motion_scheduler.plan_result(action, steps=steps)
         self._overlay_renderer.update_cursor(end[0], end[1])
-        self._overlay_renderer.attach_motion(result.phase.value, {"kind": kind, "steps": len(result.path), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel})
+        self._overlay_renderer.attach_motion(result.phase.value, {"kind": kind, "steps": len(result.path), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "last_target": {"x": end[0], "y": end[1]}})
+        self._update_task_state(task_id, action=self._task_motion_event(kind=kind, phase=result.phase, action=action), verified=False)
         overlay_snapshot = self._overlay_renderer.snapshot()
         return {
             "ok": result.ok,
@@ -75,8 +102,50 @@ class Executor:
                 "cursor_y": overlay_snapshot.cursor_y,
                 "trail": [list(point) for point in overlay_snapshot.trail],
                 "metadata": overlay_snapshot.metadata,
+                "last_action_kind": overlay_snapshot.last_action_kind,
+                "last_action_status": overlay_snapshot.last_action_status,
+                "last_target": overlay_snapshot.last_target,
+                "last_error": overlay_snapshot.last_error,
+                "last_verified_at": overlay_snapshot.last_verified_at,
             },
+            "task_state": self._task_store.get(task_id).status if task_id else None,
         }
+
+    def motion_execute(
+        self,
+        kind: str,
+        start: tuple[int, int],
+        end: tuple[int, int],
+        duration_ms: int | None = None,
+        steps: int = 16,
+        hover_ms: int = 0,
+        jitter_px: int = 0,
+        accel: float = 1.0,
+        decel: float = 1.0,
+        task_id: str | None = None,
+    ) -> dict[str, Any]:
+        action = self._motion_scheduler.plan(kind=kind, start=start, end=end, duration_ms=duration_ms, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+        try:
+            result = self._motion_scheduler.execute(action, steps=steps)
+        except MotionExecutionError as exc:
+            self._overlay_renderer.attach_motion(MotionPhase.FAILED.value, {"kind": kind, "last_error": str(exc), "last_target": {"x": end[0], "y": end[1]}})
+            self._update_task_state(task_id, action=self._task_motion_event(kind=kind, phase=MotionPhase.FAILED, action=action, error_message=str(exc)), error_message=str(exc))
+            overlay_snapshot = self._overlay_renderer.snapshot()
+            return {
+                "ok": False,
+                "phase": MotionPhase.FAILED.value,
+                "action": {"kind": kind, "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}, "duration_ms": action.duration_ms, "easing": action.easing, "metadata": action.metadata},
+                "path": [],
+                "detail": str(exc),
+                "metadata": {"error": "execution_failed"},
+                "overlay_state": {"visible": overlay_snapshot.visible, "cursor_x": overlay_snapshot.cursor_x, "cursor_y": overlay_snapshot.cursor_y, "trail": [list(point) for point in overlay_snapshot.trail], "metadata": overlay_snapshot.metadata, "last_action_kind": overlay_snapshot.last_action_kind, "last_action_status": overlay_snapshot.last_action_status, "last_target": overlay_snapshot.last_target, "last_error": overlay_snapshot.last_error, "last_verified_at": overlay_snapshot.last_verified_at},
+                "task_state": self._task_store.get(task_id).status if task_id else None,
+            }
+        self._overlay_renderer.update_cursor(end[0], end[1])
+        self._overlay_renderer.attach_motion(result.phase.value, {"kind": kind, "steps": len(result.path), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "last_target": {"x": end[0], "y": end[1]}})
+        self._update_task_state(task_id, action=self._task_motion_event(kind=kind, phase=result.phase, action=action), verified=True)
+        overlay_snapshot = self._overlay_renderer.snapshot()
+        return {"ok": result.ok, "phase": result.phase.value, "action": {"kind": result.action.kind, "start": {"x": result.action.start.x, "y": result.action.start.y}, "end": {"x": result.action.end.x, "y": result.action.end.y}, "duration_ms": result.action.duration_ms, "easing": result.action.easing, "metadata": result.action.metadata}, "path": [{"x": point.x, "y": point.y, "t": point.t} for point in result.path], "detail": result.detail, "metadata": result.metadata, "overlay_state": {"visible": overlay_snapshot.visible, "cursor_x": overlay_snapshot.cursor_x, "cursor_y": overlay_snapshot.cursor_y, "trail": [list(point) for point in overlay_snapshot.trail], "metadata": overlay_snapshot.metadata, "last_action_kind": overlay_snapshot.last_action_kind, "last_action_status": overlay_snapshot.last_action_status, "last_target": overlay_snapshot.last_target, "last_error": overlay_snapshot.last_error, "last_verified_at": overlay_snapshot.last_verified_at}, "task_state": self._task_store.get(task_id).status if task_id else None}
 
     _SHORTCUT_NOISE_PATTERNS = (
         r"\s*-\s*快捷方式$",

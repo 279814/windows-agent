@@ -28,6 +28,9 @@ def register_task_tools(registry: ToolRegistry, services: Any) -> None:
                 "retries": record.retries,
                 "observations": record.observations,
                 "status": record.status,
+                "last_action": record.last_action,
+                "last_error": record.last_error,
+                "last_verified_step": record.last_verified_step,
             },
             "error": None,
         }
@@ -46,6 +49,9 @@ def register_task_tools(registry: ToolRegistry, services: Any) -> None:
                 "retries": state.retries,
                 "observations": state.observations,
                 "status": state.status,
+                "last_action": state.last_action,
+                "last_error": state.last_error,
+                "last_verified_step": state.last_verified_step,
             },
             "error": None,
         }
