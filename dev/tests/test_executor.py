@@ -541,6 +541,18 @@ class FakeDuplicateTitleCloseBackend(FakeExecBackend):
         return ("Failed to post WM_CLOSE to 计算器.", 1)
 
 
+class FakeHandleCloseFailureBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        target = FakeWindowState(name="计算器", handle=303, status="normal", pid=3303)
+        other = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        self._state = FakeDesktopState(target, windows=[target, other])
+
+    def close_app(self, name: str) -> tuple[str, int]:
+        self.calls.append(("close_app", (name,), {}))
+        return ("Failed to post WM_CLOSE to 计算器.", 1)
+
+
 def test_executor_close_window_marks_backend_failure_as_not_ok() -> None:
     backend = FakeFailBackend()
     executor = Executor(backend=backend)
@@ -852,6 +864,42 @@ def test_executor_restore_window_uses_cached_hidden_handle_with_native_fallback(
     assert result.payload["after_handle"] == 909
 
 
+def test_executor_restore_window_accepts_native_handle_success_when_restored_window_is_maximized() -> None:
+    backend = FakeHiddenCachedWindowBackend()
+    executor = Executor(backend=backend)
+    executor._remember_window_snapshots(
+        [
+            {
+                "name": "计算器",
+                "window_title": "计算器",
+                "status": "MINIMIZED",
+                "handle": 910,
+                "pid": 9910,
+                "bounds": [0, 0, 400, 600],
+                "is_visible": False,
+            }
+        ]
+    )
+
+    def reveal_maximized(handle: int | None) -> bool:
+        assert handle == 910
+        target = FakeWindowState(name="计算器", handle=910, status="maximized", pid=9910, is_visible=True)
+        backend._state = FakeDesktopState(target, windows=[target])
+        return True
+
+    executor._native_restore_window = reveal_maximized  # type: ignore[method-assign]
+    executor._native_is_iconic = lambda handle: False if handle == 910 else None  # type: ignore[method-assign]
+    executor._native_is_zoomed = lambda handle: True if handle == 910 else None  # type: ignore[method-assign]
+
+    result = executor.restore_window("计算器")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["strategy"] == "native_handle"
+    assert result.payload["verification_mode"] == "native_zoomed_visible"
+    assert result.payload["native_is_zoomed"] is True
+
+
 def test_executor_maximize_accepts_bounds_expansion_when_status_lags() -> None:
     backend = FakeGeometryMaximizeBackend()
     executor = Executor(backend=backend)
@@ -952,6 +1000,71 @@ def test_executor_resize_uses_native_restore_and_move_for_lagging_modern_window(
     assert result.payload["move_fallback_used"] is True
     assert result.payload["native_resized"] is True
     assert result.payload["native_rect_after"] == {"left": 900, "top": 120, "right": 1800, "bottom": 1320}
+
+
+def test_executor_resize_preserves_original_before_window_when_restore_was_attempted() -> None:
+    backend = FakeWindowLifecycleBackend(restore_status="maximized")
+    target = FakeWindowState(name="计算器", handle=811, status="maximized", pid=8811, bounds=[0, 0, 1200, 900])
+    backend._state = FakeDesktopState(target, windows=[target])
+    executor = Executor(backend=backend)
+
+    def native_restore(handle: int | None) -> bool:
+        if handle != 811:
+            return False
+        restored = FakeWindowState(name="计算器", handle=811, status="normal", pid=8811, bounds=[100, 100, 600, 700])
+        backend._state = FakeDesktopState(restored, windows=[restored])
+        return True
+
+    def native_rect(handle: int | None) -> dict[str, int] | None:
+        if handle != 811:
+            return None
+        window = backend._state.active_window
+        left, top, right, bottom = window.bounds
+        return {"left": left, "top": top, "right": right, "bottom": bottom}
+
+    def native_move(handle: int | None, x: int | None, y: int | None, width: int | None, height: int | None) -> bool:
+        if handle != 811 or None in {x, y, width, height}:
+            return False
+        moved = FakeWindowState(name="计算器", handle=811, status="normal", pid=8811, bounds=[x, y, x + width, y + height])
+        backend._state = FakeDesktopState(moved, windows=[moved])
+        return True
+
+    executor._native_restore_window = native_restore  # type: ignore[method-assign]
+    executor._native_is_zoomed = lambda handle: False if handle == 811 else None  # type: ignore[method-assign]
+    executor._native_is_iconic = lambda handle: False if handle == 811 else None  # type: ignore[method-assign]
+    executor._native_window_rect = native_rect  # type: ignore[method-assign]
+    executor._native_move_window = native_move  # type: ignore[method-assign]
+
+    result = executor.resize_window("计算器", width=900, height=1200, x=900, y=120)
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["before_status"] == "maximized"
+    assert result.payload["pre_resize_status"] == "normal"
+    assert result.payload["original_native_rect_before"] == {"left": 0, "top": 0, "right": 1200, "bottom": 900}
+    assert result.payload["native_rect_before"] == {"left": 100, "top": 100, "right": 600, "bottom": 700}
+
+
+def test_executor_close_window_prefers_native_handle_close_for_specific_instance() -> None:
+    backend = FakeHandleCloseFailureBackend()
+    executor = Executor(backend=backend)
+
+    def native_close(handle: int | None) -> bool:
+        if handle != 303:
+            return False
+        other = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        backend._state = FakeDesktopState(other, windows=[other])
+        return True
+
+    executor._native_close_window = native_close  # type: ignore[method-assign]
+
+    result = executor.close_window("计算器", handle=303)
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["close_strategy"] == "native.close_window"
+    assert result.payload["verification_mode"] == "handle_removed"
+    assert result.payload["target_handle"] == 303
 
 
 def test_executor_close_window_accepts_matching_count_drop_for_duplicate_titles() -> None:
