@@ -15,7 +15,7 @@ def _chapter(title: str, summary: str, sections: list[dict[str, Any]]) -> dict[s
 
 
 def build_readme(registry: ToolRegistry) -> dict[str, Any]:
-    summary = "Windows desktop agent MCP server for observation, input, window control, motion planning, overlay inspection, and task orchestration, with explicit verification semantics, handle/pid target selection guidance, discoverability metadata, and TODO placeholders."
+    summary = "Windows desktop agent MCP server for observation, input, window control, motion planning, overlay inspection, and task orchestration, with explicit verification semantics, handle/pid target selection guidance, display/DPI normalization, UAC-aware recovery, failure fallback metadata, discoverability metadata, and TODO placeholders."
     chapter = _chapter(
         "Desktop Agent Dev Workspace",
         summary,
@@ -51,7 +51,9 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
                     "motion_preview is read-only planning; inspect path, phase, overlay_state, and metadata before dispatching real cursor motion.",
                     "overlay_state is read-only and reports the latest virtual overlay snapshot without mutating desktop state.",
                     "Window tools accept name, handle, or pid selectors. Targeting precedence is handle > pid > name, so prefer handle in duplicate-title scenarios.",
+                    "Window tools also normalize display/DPI context and can carry UAC-aware fallback behavior when a window likely requires elevated permissions.",
                     "Maximize/minimize/close verification may rely on multiple signals, including status, handle visibility, active-window changes, geometry changes, or matching-window count deltas.",
+                    "Failure payloads may include failure_hint or recovery-oriented detail text when verification does not land as expected.",
                     "Treat ocr_extract/ui_match/vision_capture/vision_locate as TODO placeholders until implemented.",
                 ],
             },
@@ -267,7 +269,7 @@ def build_tool_index(registry: ToolRegistry) -> dict[str, Any]:
     return {
         "name": "tool-index",
         "title": "Desktop Agent Tool Index",
-        "summary": "Normalized tool index for MCP clients with implementation status, verification semantics, targeting semantics, result semantics, and TODO placeholders.",
+        "summary": "Normalized tool index for MCP clients with implementation status, verification semantics, targeting semantics, result semantics, display-context metadata, failure fallback metadata, and TODO placeholders.",
         "version": "1.6",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "groups": registry.group_catalog(),
@@ -328,7 +330,7 @@ def build_manifest(registry: ToolRegistry) -> dict[str, Any]:
         "catalog_uri": "desktop-agent-dev://catalog",
         "capabilities_uri": "desktop-agent-dev://capabilities",
         "security_uri": "desktop-agent-dev://security",
-        "summary": "MCP document directory for the desktop agent workspace, including verification semantics, handle/pid targeting guidance, multi-source window verification rules, and TODO placeholders.",
+        "summary": "MCP document directory for the desktop agent workspace, including verification semantics, handle/pid targeting guidance, display/DPI normalization, UAC-aware recovery, failure fallback metadata, multi-source window verification rules, and TODO placeholders.",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "tool_count": len(registry.specs),
         "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),

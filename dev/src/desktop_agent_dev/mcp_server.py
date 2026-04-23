@@ -109,9 +109,9 @@ class DesktopMCPServer:
             "layout": {
                 "kind": "frontend-discovery",
                 "render_mode": "cards-and-sections",
-                "recommended_components": ["resource-list", "group-tabs", "tool-card", "tool-detail", "status-badge"],
+                "recommended_components": ["resource-list", "group-tabs", "tool-card", "tool-detail", "status-badge", "failure-banner", "display-context-chip"],
             },
-            "summary": "Compact discovery catalog for MCP clients that want to enumerate tools and quickly locate motion_preview and overlay_state.",
+            "summary": "Compact discovery catalog for MCP clients that want to enumerate tools and quickly locate motion_preview and overlay_state, while surfacing display-context metadata, UAC-aware recovery hints, and failure fallback guidance.",
             "resources": {
                 "items": [
                     {"uri": resource["uri"], "title": resource["title"], "description": resource["description"]}

@@ -31,14 +31,14 @@ TOOL_GROUP_TITLES = {
 TODO_PLACEHOLDER_TOOLS = ("ocr_extract", "ui_match", "vision_capture", "vision_locate")
 
 RESOURCE_DESCRIPTIONS: dict[str, str] = {
-    "desktop-agent-dev://manifest": "Machine-readable MCP manifest covering resource links, verification semantics, window handle/pid targeting, multi-source verification rules, tool discoverability, and TODO placeholders.",
-    "desktop-agent-dev://readme": "Project overview and operator guidance for desktop observation, input, window control, motion preview, overlay state, and task orchestration, with verification semantics and discoverability guidance.",
-    "desktop-agent-dev://catalog": "Grouped tool catalog with normalized metadata, implementation status, verification semantics, targeting notes, example payloads, and tool discoverability fields.",
-    "desktop-agent-dev://capabilities": "Capability matrix, client hints, risk posture, verification affordances, discoverability metadata, and explicit TODO placeholder status.",
-    "desktop-agent-dev://security": "Permission model and high-risk action policy, including verification-oriented operating guidance, discoverability notes, and placeholder caveats.",
-    "desktop-agent-dev://tool-handbook": "Client-readable handbook that explains tool usage, verification semantics, handle/pid target selection, payload expectations, motion preview, overlay state, and discoverability cues.",
-    "desktop-agent-dev://tool-index": "Normalized tool index for MCP clients with implementation status, verification semantics, targeting semantics, result semantics, discoverability hints, and TODO placeholders.",
-    "desktop-agent-dev://tool-discovery": "Compact client-facing discovery catalog with resource links, grouped tool cards, focus tools, and searchable descriptions for each tool.",
+    "desktop-agent-dev://manifest": "Machine-readable MCP manifest covering resource links, verification semantics, window handle/pid targeting, multi-source verification rules, display/DPI context, UAC-aware window recovery, failure fallback hints, tool discoverability, and TODO placeholders.",
+    "desktop-agent-dev://readme": "Project overview and operator guidance for desktop observation, input, window control, motion preview, overlay state, and task orchestration, including display/DPI normalization, UAC-aware recovery, and failure fallback guidance.",
+    "desktop-agent-dev://catalog": "Grouped tool catalog with normalized metadata, implementation status, verification semantics, targeting notes, display-context metadata, UAC-aware recovery semantics, failure hints, example payloads, and tool discoverability fields.",
+    "desktop-agent-dev://capabilities": "Capability matrix, client hints, risk posture, verification affordances, display-context metadata, UAC-aware window recovery, failure fallback metadata, discoverability metadata, and explicit TODO placeholder status.",
+    "desktop-agent-dev://security": "Permission model and high-risk action policy, including verification-oriented operating guidance, UAC-sensitive fallback notes, failure-hint semantics, discoverability notes, and placeholder caveats.",
+    "desktop-agent-dev://tool-handbook": "Client-readable handbook that explains tool usage, verification semantics, handle/pid target selection, display/DPI normalization, UAC-aware recovery, failure fallback hints, payload expectations, motion preview, overlay state, and discoverability cues.",
+    "desktop-agent-dev://tool-index": "Normalized tool index for MCP clients with implementation status, verification semantics, targeting semantics, display-context metadata, failure fallback semantics, discoverability hints, and TODO placeholders.",
+    "desktop-agent-dev://tool-discovery": "Compact client-facing discovery catalog with resource links, grouped tool cards, focus tools, display-context notes, UAC-aware recovery hints, and searchable descriptions for each tool.",
 }
 
 RESOURCE_TITLES: dict[str, str] = {
@@ -162,7 +162,7 @@ class ToolRegistry:
             "capabilities": self.capabilities(),
             "policy": self.policy(),
             "examples": self.examples(),
-            "summary": "Windows desktop agent tool metadata for observation, input, window control, motion planning, overlay inspection, and task orchestration, with explicit verification semantics, handle/pid targeting guidance, discoverability metadata, and TODO placeholders.",
+            "summary": "Windows desktop agent tool metadata for observation, input, window control, motion planning, overlay inspection, and task orchestration, with explicit verification semantics, handle/pid targeting guidance, display/DPI normalization, UAC-aware recovery, failure fallback metadata, discoverability metadata, and TODO placeholders.",
             "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
         }
 

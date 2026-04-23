@@ -2000,13 +2000,14 @@ class Executor:
             target_pid = pid or (target_before or {}).get("pid")
             target_visible_before = bool(target_handle is not None and any(window.get("handle") == target_handle for window in visible_before))
             restored_from_minimized = self._window_is_minimized(target_before)
+            uac_suspected = self._window_uac_suspected(target_before)
 
             response: Any
             detail: str
             status: int | None
             strategy = "focus_app"
             native_used = False
-            if target_handle is not None and (restored_from_minimized or not target_visible_before):
+            if target_handle is not None and (restored_from_minimized or not target_visible_before) and not uac_suspected:
                 native_used = self._native_focus_window(target_handle)
             if native_used:
                 detail = f"Focused {target_label or target_handle} via native handle fallback."
@@ -2036,10 +2037,11 @@ class Executor:
                     or (target_pid is not None and active_after.get("pid") == target_pid)
                 )
             )
+            failure_detail = self._failure_feedback("window_focus", detail, uac_suspected=uac_suspected, minimized=restored_from_minimized, verified=verified)
             self._sync_overlay_from_context(active_window=current or active_after or previous, phase="focus_prepare", kind="window_focus", target=None, pause_ms=60 if verified else 0, highlight=True, status="focus_highlight" if verified else "cancelled")
             result = self._result(
                 "window_focus",
-                detail,
+                failure_detail,
                 ok=verified,
                 payload={
                     **self._window_payload(target_window=target_label, before=previous, after=current),
@@ -2051,6 +2053,7 @@ class Executor:
                     "active_window_after": active_after,
                     "matched_by": current_matched_by or matched_by,
                     "restored_from_minimized": restored_from_minimized,
+                    "uac_suspected": uac_suspected,
                     "backend_response": response,
                     "backend_response_detail": detail,
                     "backend_response_code": status,
@@ -2076,6 +2079,7 @@ class Executor:
                     fallback.payload["backend_response"] = response
                     fallback.payload["backend_response_detail"] = detail
                     fallback.payload["backend_response_code"] = status
+                    fallback.payload["failure_hint"] = self._failure_feedback("window_focus", detail, uac_suspected=uac_suspected, minimized=restored_from_minimized, verified=False)
                 return fallback
             return result
 
@@ -2866,6 +2870,7 @@ class Executor:
                     verification_mode = "native_handle_visible"
                 else:
                     verification_mode = "status_normal"
+            failure_detail = self._failure_feedback("window_restore", detail, uac_suspected=self._window_uac_suspected(before, detail), minimized=bool(before and self._window_is_minimized(before)), verified=verified)
             payload = {
                 **self._window_payload(target_window=before.get("name") if before else name, before=before, after=after),
                 "verified": verified,
@@ -2878,9 +2883,9 @@ class Executor:
                 "backend_response_detail": detail,
                 "backend_response_code": status,
                 "strategy": strategy,
+                "failure_hint": None if verified else failure_detail,
             }
-            detail = detail if verified else f"Restore verification failed for {before.get('name') if before else (name or 'active')}."
-            return self._result("window_restore", detail, ok=verified, payload=payload, tool="window_restore")
+            return self._result("window_restore", failure_detail, ok=verified, payload=payload, tool="window_restore")
         return self._result(
             "window_restore",
             f"restore:{name or 'active'}",
