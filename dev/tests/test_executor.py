@@ -864,6 +864,96 @@ def test_executor_maximize_accepts_bounds_expansion_when_status_lags() -> None:
     assert result.payload["verification_mode"] in {"bounds_expanded", "backend_ack_active_target"}
 
 
+def test_executor_maximize_accepts_native_zoomed_when_snapshot_status_lags() -> None:
+    backend = FakeWindowLifecycleBackend(maximize_status="normal")
+    target = FakeWindowState(name="计算器", handle=606, status="normal", pid=6606, bounds=[100, 100, 500, 600])
+    backend._state = FakeDesktopState(target, windows=[target])
+    executor = Executor(backend=backend)
+
+    executor._native_show_window = lambda handle, command: handle == 606 and command == 3  # type: ignore[method-assign]
+    executor._native_is_zoomed = lambda handle: True if handle == 606 else None  # type: ignore[method-assign]
+
+    result = executor.maximize_window("计算器")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["verified"] is True
+    assert result.payload["verification_mode"] == "native_zoomed"
+    assert result.payload["native_is_zoomed"] is True
+
+
+def test_executor_minimize_accepts_native_iconic_when_snapshot_status_lags() -> None:
+    backend = FakeWindowLifecycleBackend(minimize_status="normal")
+    target = FakeWindowState(name="计算器", handle=707, status="normal", pid=7707, bounds=[100, 100, 500, 600])
+    backend._state = FakeDesktopState(target, windows=[target])
+    executor = Executor(backend=backend)
+
+    executor._native_show_window = lambda handle, command: handle == 707 and command == 6  # type: ignore[method-assign]
+    executor._native_is_iconic = lambda handle: True if handle == 707 else None  # type: ignore[method-assign]
+
+    result = executor.minimize_window("计算器")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["verified"] is True
+    assert result.payload["verification_mode"] == "native_iconic"
+    assert result.payload["native_is_iconic"] is True
+
+
+def test_executor_resize_uses_native_restore_and_move_for_lagging_modern_window() -> None:
+    backend = FakeWindowLifecycleBackend(restore_status="maximized")
+    target = FakeWindowState(name="计算器", handle=808, status="maximized", pid=8808, bounds=[0, 0, 1200, 900])
+    backend._state = FakeDesktopState(target, windows=[target])
+    executor = Executor(backend=backend)
+
+    def native_restore(handle: int | None) -> bool:
+        if handle != 808:
+            return False
+        backend._state.active_window.status = "normal"
+        backend._state.active_window.bounds = [100, 100, 600, 700]
+        for window in backend._state.windows:
+            if window.handle == 808:
+                window.status = "normal"
+                window.bounds = [100, 100, 600, 700]
+        return True
+
+    def native_rect(handle: int | None) -> dict[str, int] | None:
+        if handle != 808:
+            return None
+        target_window = next((window for window in backend._state.windows if window.handle == 808), None)
+        if target_window is None:
+            return None
+        left, top, right, bottom = target_window.bounds
+        return {"left": left, "top": top, "right": right, "bottom": bottom}
+
+    def native_move(handle: int | None, x: int | None, y: int | None, width: int | None, height: int | None) -> bool:
+        if handle != 808 or None in {x, y, width, height}:
+            return False
+        bounds = [x, y, x + width, y + height]
+        backend._state.active_window.bounds = bounds
+        for window in backend._state.windows:
+            if window.handle == 808:
+                window.bounds = bounds
+                window.status = "normal"
+        return True
+
+    executor._native_restore_window = native_restore  # type: ignore[method-assign]
+    executor._native_is_zoomed = lambda handle: False if handle == 808 else None  # type: ignore[method-assign]
+    executor._native_is_iconic = lambda handle: False if handle == 808 else None  # type: ignore[method-assign]
+    executor._native_window_rect = native_rect  # type: ignore[method-assign]
+    executor._native_move_window = native_move  # type: ignore[method-assign]
+
+    result = executor.resize_window("计算器", width=900, height=1200, x=900, y=120)
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["verified"] is True
+    assert result.payload["attempted_restore"] is True
+    assert result.payload["move_fallback_used"] is True
+    assert result.payload["native_resized"] is True
+    assert result.payload["native_rect_after"] == {"left": 900, "top": 120, "right": 1800, "bottom": 1320}
+
+
 def test_executor_close_window_accepts_matching_count_drop_for_duplicate_titles() -> None:
     backend = FakeDuplicateTitleCloseBackend()
     executor = Executor(backend=backend)

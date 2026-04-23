@@ -1160,6 +1160,80 @@ class Executor:
         except Exception:
             return False
 
+    def _native_show_window(self, handle: int | None, command: int) -> bool:
+        if handle is None:
+            return False
+        user32 = self._user32()
+        if user32 is None:
+            return False
+        try:
+            hwnd = int(handle)
+            if not user32.IsWindow(hwnd):
+                return False
+            user32.ShowWindow(hwnd, int(command))
+            return True
+        except Exception:
+            return False
+
+    def _native_is_iconic(self, handle: int | None) -> bool | None:
+        if handle is None:
+            return None
+        user32 = self._user32()
+        if user32 is None:
+            return None
+        try:
+            hwnd = int(handle)
+            if not user32.IsWindow(hwnd):
+                return None
+            return bool(user32.IsIconic(hwnd))
+        except Exception:
+            return None
+
+    def _native_is_zoomed(self, handle: int | None) -> bool | None:
+        if handle is None:
+            return None
+        user32 = self._user32()
+        if user32 is None:
+            return None
+        try:
+            hwnd = int(handle)
+            if not user32.IsWindow(hwnd):
+                return None
+            return bool(user32.IsZoomed(hwnd))
+        except Exception:
+            return None
+
+    def _native_window_rect(self, handle: int | None) -> dict[str, int] | None:
+        if handle is None:
+            return None
+        user32 = self._user32()
+        if user32 is None:
+            return None
+        try:
+            hwnd = int(handle)
+            if not user32.IsWindow(hwnd):
+                return None
+            rect = ctypes.wintypes.RECT()
+            if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return None
+            return {"left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom}
+        except Exception:
+            return None
+
+    def _native_move_window(self, handle: int | None, x: int | None, y: int | None, width: int | None, height: int | None) -> bool:
+        if handle is None or None in {x, y, width, height}:
+            return False
+        user32 = self._user32()
+        if user32 is None:
+            return False
+        try:
+            hwnd = int(handle)
+            if not user32.IsWindow(hwnd):
+                return False
+            return bool(user32.MoveWindow(hwnd, int(x), int(y), int(width), int(height), True))
+        except Exception:
+            return False
+
     def _native_restore_window(self, handle: int | None) -> bool:
         if handle is None:
             return False
@@ -1659,7 +1733,6 @@ class Executor:
         y: int | None = None,
     ) -> InputResult:
         before = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
-        before_status = str(before.get("status", "")).lower() if before else None
         if before is None:
             return self._result(
                 "window_resize",
@@ -1677,6 +1750,7 @@ class Executor:
                 },
                 tool="window_resize",
             )
+        before_status = self._window_status(before)
         target_name = before.get("name") if before else name
         if self._backend is None:
             return self._result(
@@ -1690,65 +1764,52 @@ class Executor:
             loc = (x, y) if x is not None and y is not None else None
             size = (width, height) if width is not None and height is not None else None
             reason = None
+            target_handle = handle or before.get("handle")
+            target_pid = pid or before.get("pid")
             attempted_restore = before_status in {"minimized", "maximized"}
             original_status = before_status
-            if before_status == "minimized":
-                restore_app = getattr(self._backend, "restore_app", None)
-                if callable(restore_app):
-                    attempted_restore = True
-                    try:
-                        restore_app(name=target_name)
-                    except Exception:
-                        after = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
-                        return self._result(
-                            "window_resize",
-                            f"restore failed for {target_name}",
-                            ok=False,
-                            payload={
-                                **self._window_payload(target_window=target_name, before=before, after=after),
-                                "verified": False,
-                                "reason": original_status,
-                                "attempted_restore": attempted_restore,
-                                "error_kind": "restore_failed",
-                                "error_message": f"Failed to restore minimized window: {target_name}",
-                                "requested_size": {"width": width, "height": height},
-                                "requested_position": {"x": x, "y": y},
-                            },
-                            tool="window_resize",
-                        )
-                    before = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True) or before
-                    before_status = str(before.get("status", "")).lower() if before else before_status
-                    if before_status == "minimized":
-                        after = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
-                        return self._result(
-                            "window_resize",
-                            f"restore failed for {target_name}",
-                            ok=False,
-                            payload={
-                                **self._window_payload(target_window=target_name, before=before, after=after),
-                                "verified": False,
-                                "reason": original_status,
-                                "attempted_restore": attempted_restore,
-                                "error_kind": "restore_failed",
-                                "error_message": f"Failed to restore minimized window: {target_name}",
-                                "requested_size": {"width": width, "height": height},
-                                "requested_position": {"x": x, "y": y},
-                            },
-                            tool="window_resize",
-                        )
-                    reason = original_status
-            elif before_status == "maximized":
+            if attempted_restore:
                 reason = original_status
                 restore_app = getattr(self._backend, "restore_app", None)
+                restored = False
                 if callable(restore_app):
                     try:
                         restore_app(name=target_name)
                     except Exception:
                         pass
+                before = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True) or before
+                before_status = self._window_status(before)
+                native_iconic = self._native_is_iconic(target_handle)
+                native_zoomed = self._native_is_zoomed(target_handle)
+                restored = before_status not in {"minimized", "maximized"} and native_iconic is not True and native_zoomed is not True
+                if not restored and target_handle is not None and self._native_restore_window(target_handle):
+                    time.sleep(0.08)
                     before = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True) or before
-                    before_status = str(before.get("status", "")).lower() if before else before_status
-                    if before_status != "maximized":
-                        reason = None
+                    before_status = self._window_status(before)
+                    native_iconic = self._native_is_iconic(target_handle)
+                    native_zoomed = self._native_is_zoomed(target_handle)
+                    restored = before_status not in {"minimized", "maximized"} and native_iconic is not True and native_zoomed is not True
+                if not restored:
+                    after = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
+                    return self._result(
+                        "window_resize",
+                        f"restore failed for {target_name}",
+                        ok=False,
+                        payload={
+                            **self._window_payload(target_window=target_name, before=before, after=after),
+                            "verified": False,
+                            "reason": original_status,
+                            "attempted_restore": attempted_restore,
+                            "native_is_iconic": native_iconic,
+                            "native_is_zoomed": native_zoomed,
+                            "error_kind": "restore_failed",
+                            "error_message": f"Failed to restore window before resize: {target_name}",
+                            "requested_size": {"width": width, "height": height},
+                            "requested_position": {"x": x, "y": y},
+                        },
+                        tool="window_resize",
+                    )
+                reason = None
             try:
                 response = self._backend.resize_app(name=target_name, size=size, loc=loc)
             except Exception as exc:
@@ -1768,22 +1829,68 @@ class Executor:
                     tool="window_resize",
                 )
             detail, status = self._normalize_backend_response(response)
+            rect_before = self._native_window_rect(target_handle)
+            move_fallback_used = False
+            if status in (None, 0) and target_handle is not None and None not in {x, y, width, height}:
+                if self._native_move_window(target_handle, x, y, width, height):
+                    move_fallback_used = True
+                    time.sleep(0.08)
             after = self._find_window_snapshot(handle=before.get("handle"), pid=before.get("pid"), name=name, refresh=True)
             if after is None:
                 after = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
-            after_status = str(after.get("status", "")).lower() if after else None
-            verified = bool(status in (None, 0) and after and after_status not in {"minimized", "maximized"})
+            after_status = self._window_status(after)
+            rect_after = self._native_window_rect(target_handle)
+            native_resized = bool(
+                rect_after is not None
+                and x is not None
+                and y is not None
+                and width is not None
+                and height is not None
+                and rect_after == {"left": x, "top": y, "right": x + width, "bottom": y + height}
+            )
+            snapshot_resized = bool(
+                after
+                and x is not None
+                and y is not None
+                and width is not None
+                and height is not None
+                and after.get("bounds") == [x, y, x + width, y + height]
+            )
+            backend_ack_active_target = bool(
+                after
+                and self._window_same_target(after, before)
+                and (target_handle is None or rect_after is None or None in {x, y, width, height})
+            )
+            verified = bool(
+                status in (None, 0)
+                and after
+                and after_status not in {"minimized", "maximized"}
+                and (
+                    native_resized
+                    or snapshot_resized
+                    or rect_after != rect_before
+                    or backend_ack_active_target
+                    or (width is None and height is None and x is None and y is None)
+                )
+            )
             ok_flag = verified
-            if not ok_flag and reason in {"maximized", "minimized"}:
-                detail = f"{target_name} is {reason}"
             if not ok_flag and after is None:
                 detail = f"Resize verification failed for {target_name}."
-            attempted_restore = bool(before_status in {"minimized", "maximized"})
+            elif not ok_flag and after_status in {"maximized", "minimized"}:
+                detail = f"{target_name} remained {after_status} after resize attempt."
+            elif not ok_flag:
+                detail = f"Resize verification failed for {target_name}."
             payload = {
                 **self._window_payload(target_window=target_name, before=before, after=after),
                 "verified": verified,
                 "reason": reason,
                 "attempted_restore": attempted_restore,
+                "native_rect_before": rect_before,
+                "native_rect_after": rect_after,
+                "native_resized": native_resized,
+                "snapshot_resized": snapshot_resized,
+                "backend_ack_active_target": backend_ack_active_target,
+                "move_fallback_used": move_fallback_used,
                 "requested_size": {"width": width, "height": height},
                 "requested_position": {"x": x, "y": y},
                 "backend_response": response,
@@ -1804,10 +1911,10 @@ class Executor:
                 tool="window_minimize",
             )
         if hasattr(self._backend, "minimize_app"):
-            response = self._backend.minimize_app(name=before.get("name") if before else name)
-            detail, status = self._normalize_backend_response(response)
             target_handle = handle or (before.get("handle") if before else None)
             target_pid = pid or (before.get("pid") if before else None)
+            response = self._backend.minimize_app(name=before.get("name") if before else name)
+            detail, status = self._normalize_backend_response(response)
             observations = self._poll_window_observations(name=name, handle=target_handle, pid=target_pid, attempts=6, delay=0.12)
             after = observations[-1]["target"] if observations else None
             active_after = observations[-1]["active"] if observations else None
@@ -1815,6 +1922,7 @@ class Executor:
             target_handle_present_after = bool(target_handle is not None and any(window.get("handle") == target_handle for window in visible_after))
             verification_mode = "unverified"
             verified = False
+            native_iconic = self._native_is_iconic(target_handle)
             if status in (None, 0):
                 for observation in observations:
                     observed_target = observation["target"]
@@ -1845,6 +1953,17 @@ class Executor:
                         verified = True
                         verification_mode = "handle_hidden_after_minimize"
                         break
+            if not verified and status in (None, 0) and target_handle is not None and self._native_show_window(target_handle, 6):
+                time.sleep(0.12)
+                observations = self._poll_window_observations(name=name, handle=target_handle, pid=target_pid, attempts=6, delay=0.12)
+                after = observations[-1]["target"] if observations else None
+                active_after = observations[-1]["active"] if observations else None
+                visible_after = observations[-1]["visible"] if observations else []
+                target_handle_present_after = bool(target_handle is not None and any(window.get("handle") == target_handle for window in visible_after))
+                native_iconic = self._native_is_iconic(target_handle)
+                if native_iconic is True:
+                    verified = True
+                    verification_mode = "native_iconic"
             payload = {
                 **self._window_payload(target_window=before.get("name") if before else name, before=before, after=after),
                 "verified": verified,
@@ -1855,6 +1974,7 @@ class Executor:
                 "target_window_after_matches_target": self._window_same_target(after, before),
                 "active_window_after_matches_target": self._window_same_target(active_after, before),
                 "active_window_after": active_after,
+                "native_is_iconic": native_iconic,
                 "backend_response": response,
                 "backend_response_detail": detail,
                 "backend_response_code": status,
@@ -1873,15 +1993,16 @@ class Executor:
                 tool="window_maximize",
             )
         if hasattr(self._backend, "maximize_app"):
-            response = self._backend.maximize_app(name=before.get("name") if before else name)
-            detail, status = self._normalize_backend_response(response)
             target_handle = handle or (before.get("handle") if before else None)
             target_pid = pid or (before.get("pid") if before else None)
+            response = self._backend.maximize_app(name=before.get("name") if before else name)
+            detail, status = self._normalize_backend_response(response)
             observations = self._poll_window_observations(name=name, handle=target_handle, pid=target_pid, prefer_active=True, attempts=6, delay=0.12)
             after = observations[-1]["target"] if observations else None
             verification_mode = "unverified"
             verified = False
             before_area = self._window_bounds_area(before)
+            native_zoomed = self._native_is_zoomed(target_handle)
             if status in (None, 0):
                 for observation in observations:
                     observed_target = observation["target"]
@@ -1902,10 +2023,19 @@ class Executor:
                         verified = True
                         verification_mode = "bounds_expanded"
                         break
+            if not verified and status in (None, 0) and target_handle is not None and self._native_show_window(target_handle, 3):
+                time.sleep(0.12)
+                observations = self._poll_window_observations(name=name, handle=target_handle, pid=target_pid, prefer_active=True, attempts=6, delay=0.12)
+                after = observations[-1]["target"] if observations else None
+                native_zoomed = self._native_is_zoomed(target_handle)
+                if native_zoomed is True:
+                    verified = True
+                    verification_mode = "native_zoomed"
             payload = {
                 **self._window_payload(target_window=before.get("name") if before else name, before=before, after=after),
                 "verified": verified,
                 "verification_mode": verification_mode,
+                "native_is_zoomed": native_zoomed,
                 "backend_response": response,
                 "backend_response_detail": detail,
                 "backend_response_code": status,
