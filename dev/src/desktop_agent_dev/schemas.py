@@ -4,6 +4,18 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
 
+OverlayTransitionState = Literal[
+    "idle",
+    "focus_preparing",
+    "focus_highlight",
+    "switching",
+    "switch_tail",
+    "stable",
+    "cancelled",
+    "failed",
+]
+
+
 ToolName = Literal[
     "desktop_snapshot",
     "input_click",

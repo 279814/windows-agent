@@ -9,6 +9,8 @@ class OverlayFrame:
     visible: bool = False
     cursor_x: int = 0
     cursor_y: int = 0
+    cursor_color: str = "#ff0000"
+    user_cursor_color: str = "#3b82f6"
     trail: list[tuple[int, int]] = field(default_factory=list)
     click_ripples: list[dict[str, int]] = field(default_factory=list)
     drag_active: bool = False
@@ -19,6 +21,8 @@ class OverlayFrame:
     metadata: dict[str, Any] = field(default_factory=dict)
     last_action_kind: str | None = None
     last_action_status: str | None = None
+    transition_state: str = "idle"
+    transition_reason: str | None = None
     last_target: dict[str, int] | None = None
     last_error: str | None = None
     last_verified_at: str | None = None
@@ -41,7 +45,7 @@ class OverlayRenderer:
         self.frame.display_id = display_id
         self.frame.scale_factor = float(scale_factor)
         self.frame.monitor_bounds = [] if monitor_bounds is None else [dict(bounds) for bounds in monitor_bounds]
-        self.frame.metadata.update({"display_id": display_id, "scale_factor": self.frame.scale_factor, "monitor_bounds": self.frame.monitor_bounds})
+        self.frame.metadata.update({"display_id": display_id, "scale_factor": self.frame.scale_factor, "monitor_bounds": self.frame.monitor_bounds, "cursor_color": self.frame.cursor_color, "user_cursor_color": self.frame.user_cursor_color})
 
     def update_cursor(self, x: int, y: int) -> None:
         self.frame.cursor_x = x
@@ -49,6 +53,7 @@ class OverlayRenderer:
         self.frame.trail.append((x, y))
         if len(self.frame.trail) > 128:
             self.frame.trail = self.frame.trail[-128:]
+        self.frame.metadata.update({"cursor_x": x, "cursor_y": y, "cursor_color": self.frame.cursor_color, "user_cursor_color": self.frame.user_cursor_color})
 
     def draw_click_ripple(self, x: int, y: int, radius: int = 18) -> None:
         self.frame.click_ripples.append({"x": x, "y": y, "radius": radius})
@@ -77,6 +82,11 @@ class OverlayRenderer:
             self.frame.timeline = self.frame.timeline[-64:]
         self.frame.metadata["timeline_length"] = len(self.frame.timeline)
 
+    def set_transition_state(self, state: str, *, reason: str | None = None) -> None:
+        self.frame.transition_state = state
+        self.frame.transition_reason = reason
+        self.frame.metadata.update({"transition_state": state, "transition_reason": reason})
+
     def attach_motion(self, phase: str, metadata: dict[str, Any] | None = None) -> None:
         self.frame.visible = True
         self.frame.last_action_status = phase
@@ -86,6 +96,10 @@ class OverlayRenderer:
             self.frame.metadata.update(metadata)
             if "kind" in metadata:
                 self.frame.last_action_kind = str(metadata["kind"])
+            if "transition_state" in metadata:
+                self.set_transition_state(str(metadata["transition_state"]), reason=None if metadata.get("transition_reason") is None else str(metadata.get("transition_reason")))
+            if "transition_reason" in metadata:
+                self.frame.transition_reason = None if metadata["transition_reason"] is None else str(metadata["transition_reason"])
             if "last_target" in metadata and isinstance(metadata["last_target"], dict):
                 self.frame.last_target = {"x": int(metadata["last_target"].get("x", 0)), "y": int(metadata["last_target"].get("y", 0))}
             if "last_error" in metadata:
@@ -108,6 +122,8 @@ class OverlayRenderer:
             metadata=dict(self.frame.metadata),
             last_action_kind=self.frame.last_action_kind,
             last_action_status=self.frame.last_action_status,
+            transition_state=self.frame.transition_state,
+            transition_reason=self.frame.transition_reason,
             last_target=None if self.frame.last_target is None else dict(self.frame.last_target),
             last_error=self.frame.last_error,
             last_verified_at=self.frame.last_verified_at,

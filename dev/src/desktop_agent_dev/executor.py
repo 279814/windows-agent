@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from .motion import MotionAction, MotionScheduler, MotionResult, MotionPhase, MotionExecutionError
 from .overlay import OverlayRenderer
+from .schemas import OverlayTransitionState
 from .state import TaskStore
 
 
@@ -48,6 +49,8 @@ class Executor:
             "visible": overlay_snapshot.visible,
             "cursor_x": overlay_snapshot.cursor_x,
             "cursor_y": overlay_snapshot.cursor_y,
+            "cursor_color": overlay_snapshot.cursor_color,
+            "user_cursor_color": overlay_snapshot.user_cursor_color,
             "trail": [list(point) for point in overlay_snapshot.trail],
             "click_ripples": [dict(ripple) for ripple in overlay_snapshot.click_ripples],
             "drag_active": overlay_snapshot.drag_active,
@@ -64,7 +67,7 @@ class Executor:
             "timeline": [dict(item) for item in overlay_snapshot.timeline],
         }
 
-    def _sync_overlay_from_context(self, *, active_window: dict[str, Any] | None = None, phase: str | None = None, kind: str | None = None, target: tuple[int, int] | None = None, drag_start: tuple[int, int] | None = None, drag_active: bool | None = None) -> None:
+    def _sync_overlay_from_context(self, *, active_window: dict[str, Any] | None = None, phase: str | None = None, kind: str | None = None, target: tuple[int, int] | None = None, drag_start: tuple[int, int] | None = None, drag_active: bool | None = None, pause_ms: int | None = None, highlight: bool = False, tail_ms: int | None = None, status: str | None = None) -> None:
         try:
             display_id = None
             scale_factor = 1.0
@@ -91,6 +94,10 @@ class Executor:
                         "kind": kind,
                         "active_window": active_window,
                         "last_target": None if target is None else {"x": target[0], "y": target[1]},
+                        "pause_ms": pause_ms,
+                        "highlight": highlight,
+                        "tail_ms": tail_ms,
+                        "status": status,
                     },
                 )
         except Exception:
@@ -1750,6 +1757,7 @@ class Executor:
         previous = self._snapshot_window(refresh=True)
         target_before, matched_by = self._resolve_target_window(name=name, handle=handle, pid=pid, refresh=True, prefer_active=True)
         target_label = (target_before or {}).get("name") or name
+        self._sync_overlay_from_context(active_window=previous, phase="switch_prepare", kind="window_switch", target=None, highlight=True, status="transition")
         if self._backend is None:
             return self._result(
                 "window_switch",
@@ -1803,6 +1811,7 @@ class Executor:
             backend_response = response
             backend_response_detail = detail
             backend_response_code = status
+            self._sync_overlay_from_context(active_window=current or previous, phase="switch_commit", kind="window_switch", target=None, tail_ms=120, status="transition" if not verified else "stable")
             if verified and status not in (None, 0):
                 resolved_name = current.get("name") if current else None
                 result_detail = f"Switched to {resolved_name or target_label} window."
@@ -1884,6 +1893,7 @@ class Executor:
                     or (target_pid is not None and active_after.get("pid") == target_pid)
                 )
             )
+            self._sync_overlay_from_context(active_window=current or active_after or previous, phase="focus_prepare", kind="window_focus", target=None, pause_ms=60 if verified else 0, highlight=True, status="transition")
             result = self._result(
                 "window_focus",
                 detail,
