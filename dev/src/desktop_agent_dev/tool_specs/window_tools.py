@@ -36,6 +36,15 @@ WINDOW_LAUNCH_OUTPUT_EXAMPLES = [
                 "matched_window_name": "计算器",
                 "verification_source": "name",
                 "verification_hint": "计算器",
+                "verification_attempts": [
+                    {
+                        "attempt": 1,
+                        "window_count_increased": True,
+                        "detected_window_name": "计算器",
+                        "verification_source": "name",
+                        "target_matches": True,
+                    }
+                ],
                 "target_matches": True,
                 "verification_status": "success",
                 "result_code": "OK",
@@ -48,12 +57,12 @@ WINDOW_LAUNCH_OUTPUT_EXAMPLES = [
 
 WINDOW_SWITCH_OUTPUT_EXAMPLES = [
     {
-        "ok": False,
+        "ok": True,
         "tool": "window_switch",
         "message": "ok",
         "data": {
             "action": "window_switch",
-            "ok": False,
+            "ok": True,
             "detail": "Switched to *Test.Txt - Notepad window.",
             "payload": {
                 "before_target_window": "计算器",
@@ -79,7 +88,7 @@ WINDOW_SWITCH_OUTPUT_EXAMPLES = [
                 "backend_response": ["Switched to *Test.Txt - Notepad window.", 0],
                 "backend_response_detail": "Switched to *Test.Txt - Notepad window.",
                 "backend_response_code": 0,
-                "verified": False,
+                "verified": True,
             },
         },
         "error": None,
@@ -125,6 +134,12 @@ WINDOW_FOCUS_OUTPUT_EXAMPLES = [
                 "backend_response": ["Restored Test.Txt - Notepad from minimized and switched to it.", 0],
                 "backend_response_detail": "Restored Test.Txt - Notepad from minimized and switched to it.",
                 "backend_response_code": 0,
+                "focus_backend_response": ["Unable to focus hidden target directly.", 1],
+                "focus_backend_response_detail": "Unable to focus hidden target directly.",
+                "focus_backend_response_code": 1,
+                "switch_backend_response": ["Restored Test.Txt - Notepad from minimized and switched to it.", 0],
+                "switch_backend_response_detail": "Restored Test.Txt - Notepad from minimized and switched to it.",
+                "switch_backend_response_code": 0,
                 "verified": True,
                 "strategy": "switch_window",
             },
