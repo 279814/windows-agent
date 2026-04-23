@@ -9,6 +9,9 @@ import subprocess
 import time
 from typing import Any
 
+from .motion import MotionAction, MotionScheduler, MotionResult, MotionPhase
+from .overlay import OverlayRenderer
+
 
 class ExecutorError(RuntimeError):
     pass
@@ -26,6 +29,15 @@ class InputResult:
 class Executor:
     """Desktop execution facade with real Windows-MCP backend support."""
 
+    def __init__(self, backend: Any | None = None, motion_scheduler: MotionScheduler | None = None, overlay_renderer: OverlayRenderer | None = None) -> None:
+        self._backend = backend
+        self._window_history: list[dict[str, Any]] = []
+        self._motion_scheduler = motion_scheduler or MotionScheduler()
+        self._overlay_renderer = overlay_renderer or OverlayRenderer()
+
+    def _result(self, action: str, detail: str, ok: bool = True, payload: dict[str, Any] | None = None, tool: str | None = None) -> InputResult:
+        return InputResult(action=action, ok=ok, detail=detail, payload=payload, tool=tool or action)
+
     _SHORTCUT_NOISE_PATTERNS = (
         r"\s*-\s*快捷方式$",
         r"\s*快捷方式$",
@@ -37,13 +49,6 @@ class Executor:
         r"\s+v?\d+(?:\.\d+){1,3}$",
         r"\s+(?:version|ver)\.?\s*\d+(?:\.\d+){0,3}$",
     )
-
-    def __init__(self, backend: Any | None = None) -> None:
-        self._backend = backend
-        self._window_history: list[dict[str, Any]] = []
-
-    def _result(self, action: str, detail: str, ok: bool = True, payload: dict[str, Any] | None = None, tool: str | None = None) -> InputResult:
-        return InputResult(action=action, ok=ok, detail=detail, payload=payload, tool=tool or action)
 
     def _launch_search_dirs(self) -> list[Path]:
         candidates = [
