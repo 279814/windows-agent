@@ -7,12 +7,14 @@ class FakeWindowState:
         self.handle = handle
         self.status = status
         self.window_title = name
+        self.value = ""
 
 
 class FakeDesktopState:
     def __init__(self, active_window: FakeWindowState | None, windows: list[FakeWindowState] | None = None) -> None:
         self.active_window = active_window
         self.windows = windows or ([active_window] if active_window is not None else [])
+        self.focused_control = active_window
 
 
 class FakeExecBackend:
@@ -44,6 +46,9 @@ class FakeExecBackend:
                 {"text": text, "press_enter": press_enter, "clear": clear, "caret_position": caret_position},
             )
         )
+        active = getattr(self._state, "active_window", None)
+        if active is not None:
+            setattr(active, "value", text)
 
     def shortcut(self, keys: str) -> None:
         self.calls.append(("shortcut", (keys,), {}))
@@ -104,7 +109,7 @@ def test_executor_uses_backend_for_input() -> None:
     executor = Executor(backend=backend)
 
     result = executor.click(100, 200, button="right", clicks=2)
-    assert result == InputResult(action="click", ok=True, detail="clicked:100,200:right:2", payload=result.payload, tool="input_click")
+    assert result == InputResult(action="input_click", ok=True, detail="clicked:100,200:right:2", payload=result.payload, tool="input_click")
     assert executor.move(9, 8).detail == "moved:9,8"
     assert executor.type_text("hello", press_enter=True, clear=True, caret_position="end").detail == "typed:hello:enter"
     assert executor.shortcut("ctrl+s").detail == "shortcut:ctrl+s"
@@ -113,11 +118,11 @@ def test_executor_uses_backend_for_input() -> None:
     assert executor.multi_edit([(1, 2, "a"), (3, 4, "b")]).detail == "multi_edited:2"
     assert executor.switch_window("main").detail == "switch:main"
     assert executor.focus_window("main").detail == "focus:main"
+    assert executor.resize_window(name="main", width=100, height=200).detail == "resize:main"
     close_result = executor.close_window("main")
     assert close_result.ok is True
     assert close_result.payload is not None
     assert close_result.payload["post_close_verified"] is True
-    assert executor.resize_window(name="main", width=100, height=200).detail == "resize:main"
     launch_result = executor.launch_app("calc")
     assert launch_result.action == "input_launch_app"
     assert launch_result.ok is True
@@ -134,8 +139,8 @@ def test_executor_uses_backend_for_input() -> None:
         "multi_edit",
         "switch_app",
         "focus_app",
-        "close_app",
         "resize_app",
+        "close_app",
         "launch_app",
     ]
 
@@ -295,16 +300,25 @@ class FakeWindowLifecycleBackend(FakeExecBackend):
     def maximize_app(self, name: str | None = None) -> tuple[str, int]:
         self.calls.append(("maximize_app", (name,), {}))
         self._state.active_window.status = self.maximize_status
+        for window in self._state.windows:
+            if name is None or window.name == name:
+                window.status = self.maximize_status
         return (f"Maximized {name} window.", 0)
 
     def minimize_app(self, name: str | None = None) -> tuple[str, int]:
         self.calls.append(("minimize_app", (name,), {}))
         self._state.active_window.status = self.minimize_status
+        for window in self._state.windows:
+            if name is None or window.name == name:
+                window.status = self.minimize_status
         return (f"Minimized {name} window.", 0)
 
     def restore_app(self, name: str | None = None) -> tuple[str, int]:
         self.calls.append(("restore_app", (name,), {}))
         self._state.active_window.status = self.restore_status
+        for window in self._state.windows:
+            if name is None or window.name == name:
+                window.status = self.restore_status
         return (f"Restored {name} window.", 0)
 
 

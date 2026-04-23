@@ -57,12 +57,12 @@ class DesktopMCPServer:
     def _register_resources(self) -> None:
         if hasattr(self.mcp, "resource"):
             self.mcp.resource(name="readme", uri="desktop-agent-dev://readme", description="Project overview and usage guidance.")(lambda: self.readme)
-            self.mcp.resource(name="catalog", uri="desktop-agent-dev://catalog", description="Grouped tool catalog with detailed metadata.")(lambda: self.catalog)
-            self.mcp.resource(name="capabilities", uri="desktop-agent-dev://capabilities", description="Capability matrix and client hints.")(lambda: self.capabilities)
+            self.mcp.resource(name="catalog", uri="desktop-agent-dev://catalog", description="Grouped tool catalog with implementation status, examples, and TODO markers.")(lambda: self.catalog)
+            self.mcp.resource(name="capabilities", uri="desktop-agent-dev://capabilities", description="Capability matrix, client hints, and placeholder/TODO status.")(lambda: self.capabilities)
             self.mcp.resource(name="security", uri="desktop-agent-dev://security", description="Permission model and risk policy.")(lambda: self.security)
             self.mcp.resource(name="manifest", uri="desktop-agent-dev://manifest", description="MCP document manifest for the desktop agent.")(lambda: self.manifest)
-            self.mcp.resource(name="tool-handbook", uri="desktop-agent-dev://tool-handbook", description="Client-readable tool handbook for Cursor/Claude catalogs.")(lambda: self.tool_handbook)
-            self.mcp.resource(name="tool-index", uri="desktop-agent-dev://tool-index", description="Tool catalog index with grouped metadata.")(lambda: self.tool_registry.metadata())
+            self.mcp.resource(name="tool-handbook", uri="desktop-agent-dev://tool-handbook", description="Client-readable tool handbook with placeholder caveats and usage guidance.")(lambda: self.tool_handbook)
+            self.mcp.resource(name="tool-index", uri="desktop-agent-dev://tool-index", description="Tool catalog index with grouped metadata and implementation status.")(lambda: self.tool_registry.metadata())
 
     def run(self) -> None:
         self.mcp.run()

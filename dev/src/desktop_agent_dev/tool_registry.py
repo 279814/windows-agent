@@ -26,6 +26,8 @@ TOOL_GROUP_TITLES = {
     "task": "Task Orchestration",
 }
 
+TODO_PLACEHOLDER_TOOLS = ("ocr_extract", "ui_match", "vision_capture", "vision_locate")
+
 
 @dataclass(slots=True)
 class ToolSpec:
@@ -58,11 +60,11 @@ class ToolRegistry:
     def resource_index(self) -> list[dict[str, str]]:
         return [
             {"uri": "desktop-agent-dev://readme", "title": "README", "description": "Project overview and usage guidance."},
-            {"uri": "desktop-agent-dev://catalog", "title": "Catalog", "description": "Grouped tool directory with detailed metadata."},
-            {"uri": "desktop-agent-dev://capabilities", "title": "Capabilities", "description": "Capability matrix and client hints."},
+            {"uri": "desktop-agent-dev://catalog", "title": "Catalog", "description": "Grouped tool directory with implementation status, examples, and TODO markers."},
+            {"uri": "desktop-agent-dev://capabilities", "title": "Capabilities", "description": "Capability matrix, client hints, and placeholder/TODO status."},
             {"uri": "desktop-agent-dev://security", "title": "Security", "description": "Permission model and risk policy."},
-            {"uri": "desktop-agent-dev://tool-handbook", "title": "Tool Handbook", "description": "Formal directory for MCP clients and agents."},
-            {"uri": "desktop-agent-dev://tool-index", "title": "Tool Index", "description": "Normalized tool metadata for clients."},
+            {"uri": "desktop-agent-dev://tool-handbook", "title": "Tool Handbook", "description": "Formal directory for MCP clients and agents, including placeholder caveats."},
+            {"uri": "desktop-agent-dev://tool-index", "title": "Tool Index", "description": "Normalized tool metadata for clients with implementation status."},
         ]
 
     def metadata(self) -> dict[str, Any]:
@@ -76,6 +78,7 @@ class ToolRegistry:
             "policy": self.policy(),
             "examples": self.examples(),
             "summary": "Windows-compatible desktop agent tools for observation, input, window control, and task planning.",
+            "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
         }
 
     def tool_catalog(self) -> list[dict[str, Any]]:
@@ -116,9 +119,11 @@ class ToolRegistry:
             "input": True,
             "window": True,
             "task": True,
-            "ocr_hooks": True,
-            "vision_hooks": True,
+            "ocr_hooks": False,
+            "vision_hooks": False,
             "supports_handshake_metadata": True,
+            "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
+            "placeholder_tools_implemented": False,
         }
 
     def policy(self) -> dict[str, Any]:

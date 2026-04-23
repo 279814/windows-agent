@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .tool_registry import ToolRegistry
+from .tool_registry import TODO_PLACEHOLDER_TOOLS, ToolRegistry
 
 
 RESOURCE_SECTIONS = (
@@ -49,8 +49,10 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
         "guidance": [
             "Read the catalog before invoking tools.",
             "Use snapshot tools to observe state before acting.",
+            "Treat ocr_extract/ui_match/vision_capture/vision_locate as TODO placeholders until implemented.",
         ],
         "high_risk_actions": ["window_close", "launch_app"],
+        "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
     }
     chapter = _chapter("Desktop Agent Dev Workspace", summary, body)
     chapter["resource"] = "desktop-agent-dev://readme"
@@ -59,12 +61,13 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
 
 
 def build_catalog(registry: ToolRegistry) -> dict[str, Any]:
-    summary = "Grouped tool directory with metadata and examples."
+    summary = "Grouped tool directory with metadata, examples, and implementation status."
     body = {
         "version": "1.5",
         "groups": registry.group_catalog(),
         "tools": registry.tool_catalog(),
         "examples": registry.examples(),
+        "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
     }
     chapter = _chapter("Desktop Agent Tool Catalog", summary, body)
     chapter["resource"] = "desktop-agent-dev://catalog"
@@ -73,7 +76,7 @@ def build_catalog(registry: ToolRegistry) -> dict[str, Any]:
 
 
 def build_capabilities(registry: ToolRegistry) -> dict[str, Any]:
-    summary = "Server capabilities and client hints."
+    summary = "Server capabilities, client hints, and placeholder status."
     body = {
         "summary": registry.capabilities(),
         "policy": registry.policy(),
@@ -82,7 +85,9 @@ def build_capabilities(registry: ToolRegistry) -> dict[str, Any]:
             "tool_handbook_available": True,
             "parameter_help": True,
             "result_help": True,
+            "placeholder_tools_require_fallback": True,
         },
+        "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
     }
     chapter = _chapter("Desktop Agent Capabilities", summary, body)
     chapter["resource"] = "desktop-agent-dev://capabilities"
@@ -112,7 +117,7 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
     return {
         "name": "tool-handbook",
         "title": "Desktop Agent Tool Handbook",
-        "summary": "Formal directory for MCP clients and agents.",
+        "summary": "Formal directory for MCP clients and agents, including placeholder caveats.",
         "sections": [
             {"heading": "Overview", "resource": "desktop-agent-dev://readme", "summary": "Project overview and usage guidance."},
             {"heading": "Tool Catalog", "resource": "desktop-agent-dev://catalog", "summary": "Grouped tool directory with metadata and examples."},
@@ -125,6 +130,7 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
             "capabilities": build_capabilities(registry),
             "security": build_security(registry),
         },
+        "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
     }
 
 
@@ -132,7 +138,7 @@ def build_manifest(registry: ToolRegistry) -> dict[str, Any]:
     return {
         "name": "desktop-agent-dev",
         "title": "Desktop Agent Dev Workspace",
-        "version": "1.4",
+        "version": "1.5",
         "stage": "phase1",
         "high_risk_actions": ["window_close", "launch_app"],
         "close_semantics": {
@@ -156,4 +162,5 @@ def build_manifest(registry: ToolRegistry) -> dict[str, Any]:
         "summary": "MCP document directory for the desktop agent workspace.",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "tool_count": len(registry.specs),
+        "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
     }
