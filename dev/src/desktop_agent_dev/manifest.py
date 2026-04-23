@@ -32,7 +32,7 @@ def _chapter(title: str, summary: str, body: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_readme(registry: ToolRegistry) -> dict[str, Any]:
-    summary = "Windows desktop agent MCP server for observation, input, window control, and task orchestration."
+    summary = "Windows desktop agent MCP server for observation, input, window control, and task orchestration, including verification semantics and TODO placeholders."
     body = {
         "name": "desktop-agent-dev",
         "version": "1.6",
@@ -40,6 +40,7 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
         "tool_count": len(registry.specs),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "links": {
+            "manifest": "desktop-agent-dev://manifest",
             "handbook": "desktop-agent-dev://tool-handbook",
             "catalog": "desktop-agent-dev://catalog",
             "capabilities": "desktop-agent-dev://capabilities",
@@ -62,7 +63,7 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
 
 
 def build_catalog(registry: ToolRegistry) -> dict[str, Any]:
-    summary = "Grouped tool directory with metadata, examples, and implementation status."
+    summary = "Grouped tool directory with metadata, examples, implementation status, verification semantics, and TODO placeholders."
     body = {
         "version": "1.6",
         "groups": registry.group_catalog(),
@@ -120,10 +121,10 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
     return {
         "name": "tool-handbook",
         "title": "Desktop Agent Tool Handbook",
-        "summary": "Formal directory for MCP clients and agents, including verification guidance and placeholder caveats.",
+        "summary": "Formal directory for MCP clients and agents, including verification semantics and TODO placeholders.",
         "sections": [
             {"heading": "Overview", "resource": "desktop-agent-dev://readme", "summary": "Project overview and usage guidance."},
-            {"heading": "Tool Catalog", "resource": "desktop-agent-dev://catalog", "summary": "Grouped tool directory with metadata and examples."},
+            {"heading": "Tool Catalog", "resource": "desktop-agent-dev://catalog", "summary": "Grouped tool directory with metadata, verification semantics, and TODO placeholders."},
             {"heading": "Capabilities", "resource": "desktop-agent-dev://capabilities", "summary": "Server capabilities and client hints."},
             {"heading": "Security", "resource": "desktop-agent-dev://security", "summary": "Permission model and high-risk action policy."},
         ],
@@ -154,6 +155,7 @@ def build_manifest(registry: ToolRegistry) -> dict[str, Any]:
             "placeholder_tools": "ocr_extract, ui_match, vision_capture, and vision_locate are TODO placeholders and intentionally return not_implemented.",
         },
         "resources": [
+            {"uri": "desktop-agent-dev://manifest", "title": "Manifest"},
             {"uri": "desktop-agent-dev://readme", "title": "README"},
             {"uri": "desktop-agent-dev://catalog", "title": "Catalog"},
             {"uri": "desktop-agent-dev://capabilities", "title": "Capabilities"},
@@ -167,7 +169,7 @@ def build_manifest(registry: ToolRegistry) -> dict[str, Any]:
         "catalog_uri": "desktop-agent-dev://catalog",
         "capabilities_uri": "desktop-agent-dev://capabilities",
         "security_uri": "desktop-agent-dev://security",
-        "summary": "MCP document directory for the desktop agent workspace.",
+        "summary": "MCP document directory for the desktop agent workspace, including verification semantics and TODO placeholders.",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "tool_count": len(registry.specs),
         "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),

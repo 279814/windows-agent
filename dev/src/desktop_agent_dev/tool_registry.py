@@ -65,7 +65,7 @@ class ToolRegistry:
             {"uri": "desktop-agent-dev://security", "title": "Security", "description": "Permission model and risk policy."},
             {"uri": "desktop-agent-dev://manifest", "title": "Manifest", "description": "MCP document manifest with resource links, risk markers, and verification semantics."},
             {"uri": "desktop-agent-dev://tool-handbook", "title": "Tool Handbook", "description": "Formal directory for MCP clients and agents, including verification guidance and placeholder caveats."},
-            {"uri": "desktop-agent-dev://tool-index", "title": "Tool Index", "description": "Normalized tool metadata for clients with implementation status and result semantics."},
+            {"uri": "desktop-agent-dev://tool-index", "title": "Tool Index", "description": "Normalized tool metadata for clients with implementation status, verification semantics, result semantics, and TODO placeholders."},
         ]
 
     def metadata(self) -> dict[str, Any]:
