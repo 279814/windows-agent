@@ -30,11 +30,11 @@ TODO_PLACEHOLDER_TOOLS = ("ocr_extract", "ui_match", "vision_capture", "vision_l
 
 RESOURCE_DESCRIPTIONS: dict[str, str] = {
     "desktop-agent-dev://manifest": "Machine-readable MCP manifest covering resource links, verification semantics, window handle/pid targeting, multi-source verification rules, and TODO placeholders.",
-    "desktop-agent-dev://readme": "Project overview and operator guidance for desktop observation, input, window control, and task orchestration, with verification semantics and TODO placeholders.",
+    "desktop-agent-dev://readme": "Project overview and operator guidance for desktop observation, input, window control, motion preview, overlay state, and task orchestration, with verification semantics and TODO placeholders.",
     "desktop-agent-dev://catalog": "Grouped tool catalog with normalized metadata, implementation status, verification semantics, targeting notes, examples, and TODO placeholders.",
     "desktop-agent-dev://capabilities": "Capability matrix, client hints, risk posture, verification affordances, and explicit TODO placeholder status.",
     "desktop-agent-dev://security": "Permission model and high-risk action policy, including verification-oriented operating guidance and placeholder caveats.",
-    "desktop-agent-dev://tool-handbook": "Client-readable handbook that explains tool usage, verification semantics, handle/pid target selection, payload expectations, and TODO placeholders.",
+    "desktop-agent-dev://tool-handbook": "Client-readable handbook that explains tool usage, verification semantics, handle/pid target selection, payload expectations, motion preview, overlay state, and TODO placeholders.",
     "desktop-agent-dev://tool-index": "Normalized tool index for MCP clients with implementation status, verification semantics, targeting semantics, result semantics, and TODO placeholders.",
 }
 
@@ -101,6 +101,10 @@ class ToolRegistry:
             return "TODO placeholder only. The tool intentionally returns a not_implemented-shaped response and should be routed to fallback logic until the capability lands."
         if spec.kind == "window":
             return "Top-level ok reflects the verified desktop outcome, not only backend success. Prefer handle or pid selectors when available, and inspect verified, matched_by, before_handle, after_handle, verification_mode, backend_response_detail, and backend_response_code."
+        if spec.name == "motion_preview":
+            return "This tool is read-only planning. Verify the returned path, phase, overlay_state, and metadata to inspect the intended cursor trajectory before dispatching real motion or drag operations."
+        if spec.name == "overlay_state":
+            return "This tool is read-only. Use visible, cursor_x, cursor_y, trail, and metadata to inspect the current virtual overlay status without mutating desktop state."
         if spec.name == "input_type":
             return "Validation is explicit: inspect focused_control and validation.before/after fields to confirm the intended control changed."
         if spec.name == "input_shortcut":
@@ -109,6 +113,8 @@ class ToolRegistry:
             return "Payload may include hit-test element metadata when the desktop backend can resolve the clicked surface. Treat missing or weak element metadata as partial verification and pair with desktop_snapshot when precision matters."
         if spec.name in {"input_move", "input_drag", "input_scroll", "input_multi_edit", "input_multi_select"}:
             return "The action result confirms dispatch. Payload richness currently varies by executor, so pair with desktop_snapshot or downstream state checks when you need post-action verification."
+        if spec.kind == "input":
+            return "Input actions vary in richness. Some tools confirm dispatch only, while planning tools such as motion_preview expose extra overlay and path metadata for pre-flight verification."
         if spec.kind == "snapshot":
             return "Read-only observations are already normalized for clients. Prefer active_window, windows, focused_control, and screenshot metadata when verifying state."
         if spec.kind == "task":
@@ -179,6 +185,8 @@ class ToolRegistry:
             "input": True,
             "window": True,
             "task": True,
+            "motion": True,
+            "overlay": True,
             "ocr_hooks": False,
             "vision_hooks": False,
             "supports_handshake_metadata": True,
@@ -198,6 +206,8 @@ class ToolRegistry:
                 "input": "medium",
                 "window": "medium",
                 "task": "low",
+                "motion": "low",
+                "overlay": "low",
             },
             "high_risk_actions": ["window_close", "window_launch", "input_launch_app"],
             "extension_rules": [
