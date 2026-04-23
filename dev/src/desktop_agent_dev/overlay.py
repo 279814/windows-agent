@@ -23,6 +23,7 @@ class OverlayFrame:
     last_action_status: str | None = None
     transition_state: str = "idle"
     transition_reason: str | None = None
+    interruption_state: str | None = None
     last_target: dict[str, int] | None = None
     last_error: str | None = None
     last_verified_at: str | None = None
@@ -87,6 +88,12 @@ class OverlayRenderer:
         self.frame.transition_reason = reason
         self.frame.metadata.update({"transition_state": state, "transition_reason": reason})
 
+    def set_interruption_state(self, state: str | None, *, reason: str | None = None) -> None:
+        self.frame.interruption_state = state
+        self.frame.metadata.update({"interruption_state": state, "interruption_reason": reason})
+        if state is None:
+            self.frame.metadata.pop("interruption_reason", None)
+
     def attach_motion(self, phase: str, metadata: dict[str, Any] | None = None) -> None:
         self.frame.visible = True
         self.frame.last_action_status = phase
@@ -124,6 +131,7 @@ class OverlayRenderer:
             last_action_status=self.frame.last_action_status,
             transition_state=self.frame.transition_state,
             transition_reason=self.frame.transition_reason,
+            interruption_state=self.frame.interruption_state,
             last_target=None if self.frame.last_target is None else dict(self.frame.last_target),
             last_error=self.frame.last_error,
             last_verified_at=self.frame.last_verified_at,

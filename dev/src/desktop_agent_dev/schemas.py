@@ -13,6 +13,25 @@ OverlayTransitionState = Literal[
     "stable",
     "cancelled",
     "failed",
+    "paused",
+]
+
+WindowLifecycleState = Literal[
+    "normal",
+    "minimized",
+    "restoring",
+    "restored",
+    "focus_lost",
+    "focus_recovered",
+    "blocked_uac",
+]
+
+InterruptionState = Literal[
+    "none",
+    "user_takeover",
+    "focus_lost",
+    "uac_blocked",
+    "monitor_changed",
 ]
 
 

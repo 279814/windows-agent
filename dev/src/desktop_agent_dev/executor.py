@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from .motion import MotionAction, MotionScheduler, MotionResult, MotionPhase, MotionExecutionError
 from .overlay import OverlayRenderer
-from .schemas import OverlayTransitionState
+from .schemas import InterruptionState, OverlayTransitionState, WindowLifecycleState
 from .state import TaskStore
 
 
@@ -67,7 +67,7 @@ class Executor:
             "timeline": [dict(item) for item in overlay_snapshot.timeline],
         }
 
-    def _sync_overlay_from_context(self, *, active_window: dict[str, Any] | None = None, phase: str | None = None, kind: str | None = None, target: tuple[int, int] | None = None, drag_start: tuple[int, int] | None = None, drag_active: bool | None = None, pause_ms: int | None = None, highlight: bool = False, tail_ms: int | None = None, status: OverlayTransitionState | None = None) -> None:
+    def _sync_overlay_from_context(self, *, active_window: dict[str, Any] | None = None, phase: str | None = None, kind: str | None = None, target: tuple[int, int] | None = None, drag_start: tuple[int, int] | None = None, drag_active: bool | None = None, pause_ms: int | None = None, highlight: bool = False, tail_ms: int | None = None, status: OverlayTransitionState | None = None, interruption_state: InterruptionState | None = None, window_state: WindowLifecycleState | None = None) -> None:
         try:
             display_id = None
             scale_factor = 1.0
@@ -98,8 +98,14 @@ class Executor:
                         "highlight": highlight,
                         "tail_ms": tail_ms,
                         "status": status,
+                        "interruption_state": interruption_state,
+                        "window_state": window_state,
                     },
                 )
+            if interruption_state is not None:
+                self._overlay_renderer.set_interruption_state(interruption_state)
+            if window_state is not None:
+                self._overlay_renderer.metadata["window_state"] = window_state
         except Exception:
             pass
 
@@ -116,11 +122,29 @@ class Executor:
                     pass
             active = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
         if active is not None:
-            self._sync_overlay_from_context(active_window=active, phase="focused", kind="window_focus", target=None)
+            self._sync_overlay_from_context(active_window=active, phase="focused", kind="window_focus", target=None, pause_ms=220, highlight=True, status="focus_highlight", window_state="restored" if active.get("status") in {"minimized", "maximized"} else "normal")
+            self._overlay_renderer.set_transition_state("stable", reason="focus ready")
         return active
 
     def _run_input_with_recovery(self, *, operation: str, recover_name: str | None = None, recover_handle: int | None = None, recover_pid: int | None = None, runner):
         attempt_notes: list[dict[str, Any]] = []
+        if self._backend is not None and hasattr(self._backend, "is_user_control_active") and self._backend.is_user_control_active():
+            self._overlay_renderer.set_interruption_state("user_takeover", reason="user control detected")
+            self._overlay_renderer.set_transition_state("paused", reason="user takeover active")
+            return self._result(
+                operation,
+                f"paused:{operation}:user_takeover",
+                ok=False,
+                payload={
+                    "operation": operation,
+                    "interruption_state": "user_takeover",
+                    "interruption_reason": "user control detected",
+                    "paused": True,
+                    "recovery_attempts": [],
+                    "overlay_state": self._overlay_snapshot_payload(),
+                },
+                tool=f"input_{operation}" if operation in {"click", "move", "drag", "scroll", "shortcut", "type"} else operation,
+            )
         before = self._ensure_window_ready(recover_name, recover_handle, recover_pid)
         if before is not None:
             attempt_notes.append({"step": "ensure_window_ready", "window": before.get("name"), "handle": before.get("handle")})
@@ -132,6 +156,10 @@ class Executor:
             failure_info = {"error": str(exc), "recovery_attempts": attempt_notes, "operation": operation}
             attempt_notes.append({"step": "runner_error", "error": str(exc)})
             self._overlay_renderer.record_timeline("input_error", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "error", "operation": operation, "error": str(exc)})
+            if self._backend is not None and hasattr(self._backend, "is_user_control_active") and self._backend.is_user_control_active():
+                self._overlay_renderer.set_interruption_state("user_takeover", reason="user control detected during recovery")
+                self._overlay_renderer.set_transition_state("paused", reason="user takeover active")
+                raise
             before_retry = self._ensure_window_ready(recover_name, recover_handle, recover_pid)
             attempt_notes.append({"step": "recover_window", "window": None if before_retry is None else before_retry.get("name"), "handle": None if before_retry is None else before_retry.get("handle")})
             self._overlay_renderer.record_timeline("input_retry", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "retry", "operation": operation, "window": None if before_retry is None else before_retry.get("name")})
@@ -188,7 +216,39 @@ class Executor:
             "target_verification": payload.get("target_verification"),
         }
 
-    def _drive_motion(self, *, kind: str, start: tuple[int, int], end: tuple[int, int], steps: int, hover_ms: int, jitter_px: int, accel: float, decel: float) -> dict[str, Any]:
+    def _normalize_input_point(self, point: tuple[int, int], context: dict[str, Any] | None = None) -> tuple[int, int]:
+        context = context or self._input_context_snapshot()
+        scale_factor = float(context.get("scale_factor") or 1.0)
+        monitor_bounds = context.get("monitor_bounds") or []
+        x, y = int(point[0]), int(point[1])
+        if scale_factor and scale_factor != 1.0:
+            x = int(round(x * scale_factor))
+            y = int(round(y * scale_factor))
+        if monitor_bounds:
+            matched = False
+            for bounds in monitor_bounds:
+                try:
+                    left = int(bounds.get("left", 0))
+                    top = int(bounds.get("top", 0))
+                    right = int(bounds.get("right", 0))
+                    bottom = int(bounds.get("bottom", 0))
+                except Exception:
+                    continue
+                if left <= x <= right and top <= y <= bottom:
+                    matched = True
+                    break
+            if not matched:
+                origin = monitor_bounds[0]
+                try:
+                    x += int(origin.get("left", 0))
+                    y += int(origin.get("top", 0))
+                except Exception:
+                    pass
+        return x, y
+
+    def _drive_motion(self, *, kind: str, start: tuple[int, int], end: tuple[int, int], steps: int, hover_ms: int, jitter_px: int, accel: float, decel: float, context: dict[str, Any] | None = None) -> dict[str, Any]:
+        start = self._normalize_input_point(start, context)
+        end = self._normalize_input_point(end, context)
         action = self._motion_scheduler.plan(kind=kind, start=start, end=end, metadata={"kind": kind}, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
         result = self._motion_scheduler.execute(action, steps=steps)
         self._overlay_renderer.show()
@@ -597,10 +657,16 @@ class Executor:
     def _input_context_snapshot(self) -> dict[str, Any]:
         state = self._safe_backend_state()
         if state is None:
-            return {"active_window": None, "focused_control": None}
+            return {"active_window": None, "focused_control": None, "display_id": None, "scale_factor": 1.0, "monitor_bounds": []}
+        display_id = getattr(state, "display_id", None) or getattr(state, "monitor_id", None)
+        scale_factor = float(getattr(state, "dpi_scale", 1.0) or 1.0)
+        monitor_bounds = getattr(state, "monitor_bounds", None) or []
         return {
             "active_window": self._window_to_snapshot(getattr(state, "active_window", None)),
             "focused_control": self._serialize_control(getattr(state, "focused_control", None)),
+            "display_id": display_id,
+            "scale_factor": scale_factor,
+            "monitor_bounds": [dict(bounds) for bounds in monitor_bounds if isinstance(bounds, dict)],
         }
 
     def _hit_test_element(self, x: int, y: int) -> dict[str, Any]:
@@ -876,7 +942,11 @@ class Executor:
                 "visible": overlay_snapshot.visible,
                 "cursor_x": overlay_snapshot.cursor_x,
                 "cursor_y": overlay_snapshot.cursor_y,
+                "cursor_color": overlay_snapshot.cursor_color,
+                "user_cursor_color": overlay_snapshot.user_cursor_color,
                 "trail": [list(point) for point in overlay_snapshot.trail],
+                "transition_state": overlay_snapshot.transition_state,
+                "transition_reason": overlay_snapshot.transition_reason,
                 "metadata": overlay_snapshot.metadata,
             },
         }
@@ -923,14 +993,15 @@ class Executor:
     def click(self, x: int, y: int, button: str = "left", clicks: int = 1, hover_ms: int = 80, jitter_px: int = 1) -> InputResult:
         def runner() -> InputResult:
             before_context = self._input_context_snapshot()
+            x, y = self._normalize_input_point((x, y), before_context)
             element = self._hit_test_element(x, y)
-            hover_motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(x, y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
-            settle_motion = self._drive_motion(kind="move", start=(x, y), end=(x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1)
-            virtual_mouse = self._drive_motion(kind="click", start=(x, y), end=(x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0)
+            hover_motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(x, y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2, context=before_context)
+            settle_motion = self._drive_motion(kind="move", start=(x, y), end=(x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1, context=before_context)
+            virtual_mouse = self._drive_motion(kind="click", start=(x, y), end=(x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0, context=before_context)
             payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element, "pre_click_hover": hover_motion, "pre_click_settle": settle_motion, **virtual_mouse}
             self._overlay_renderer.show()
             self._overlay_renderer.update_cursor(x, y)
-            self._overlay_renderer.draw_click_ripple(x, y, radius=max(14, 12 + clicks * 4))
+            self._overlay_renderer.draw_click_ripple(x, y, radius=max(16, 14 + clicks * 4))
             if self._backend is None:
                 after_context = self._input_context_snapshot()
                 payload["target_verification"] = self._verify_click_target(before_context, after_context, element=element, button=button, clicks=clicks)
@@ -956,7 +1027,9 @@ class Executor:
 
     def move(self, x: int, y: int, steps: int = 8, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0) -> InputResult:
         def runner() -> InputResult:
-            motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(x, y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+            context = self._input_context_snapshot()
+            x, y = self._normalize_input_point((x, y), context)
+            motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(x, y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel, context=context)
             payload = {"x": x, "y": y, "element": self._hit_test_element(x, y), **motion}
             self._overlay_renderer.show()
             self._overlay_renderer.update_cursor(x, y)
@@ -981,8 +1054,14 @@ class Executor:
     def drag(self, start: tuple[int, int], end: tuple[int, int], steps: int = 16, hover_ms: int = 120, jitter_px: int = 1, accel: float = 1.0, decel: float = 1.1) -> InputResult:
         def runner() -> InputResult:
             before_context = self._input_context_snapshot()
-            hover_motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=start, steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
-            virtual_mouse = self._drive_motion(kind="drag", start=start, end=end, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+            start = self._normalize_input_point(start, before_context)
+            end = self._normalize_input_point(end, before_context)
+            hover_motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=start, steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2, context=before_context)
+            virtual_mouse = self._drive_motion(kind="drag", start=start, end=end, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel, context=before_context)
+            if not verified and status in (None, 0):
+                self._overlay_renderer.set_interruption_state("focus_lost", reason="window verification degraded")
+            if not verified:
+                self._overlay_renderer.set_interruption_state("focus_lost", reason="restore verification failed")
             payload = {
                 "start": {"x": start[0], "y": start[1], "element": self._hit_test_element(start[0], start[1])},
                 "end": {"x": end[0], "y": end[1], "element": self._hit_test_element(end[0], end[1])},
@@ -993,7 +1072,8 @@ class Executor:
             }
             self._overlay_renderer.show()
             self._overlay_renderer.set_transition_state("switching", reason="drag in progress")
-            self._overlay_renderer.record_timeline("drag_prepare", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "prepare", "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}})
+            self._overlay_renderer.record_timeline("drag_prepare", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "prepare", "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}, "pause_ms": 220})
+            time.sleep(0.22)
             self._overlay_renderer.set_drag_state(True, start={"x": start[0], "y": start[1]})
             self._overlay_renderer.update_cursor(start[0], start[1])
             if self._backend is None:
@@ -1865,7 +1945,10 @@ class Executor:
 
     def focus_window(self, name: str, handle: int | None = None, pid: int | None = None) -> InputResult:
         self._overlay_renderer.show()
+        self._overlay_renderer.set_interruption_state(None)
         self._overlay_renderer.set_transition_state("focus_preparing", reason="focus_window invoked")
+        self._overlay_renderer.record_timeline("focus_prepare", {"at": datetime.now(timezone.utc).isoformat(), "kind": "window_focus", "phase": "prepare", "pause_ms": 220, "window_state": "restoring" if self._window_is_minimized(active) else "normal"})
+        time.sleep(0.22)
         active = self._ensure_window_ready(name=name, handle=handle, pid=pid)
         if self._backend is None:
             payload = self._window_payload(target_window=name, before={"name": name, "status": None, "handle": handle, "pid": pid}, after=active, verified=False)

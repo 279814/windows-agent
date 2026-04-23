@@ -17,6 +17,14 @@ class MotionPhase(str, Enum):
     CANCELLED = "cancelled"
 
 
+DEFAULT_CLICK_PREMOVE_MS = 280
+DEFAULT_LONG_MOVE_MS = 640
+DEFAULT_DRAG_MS = 1100
+DEFAULT_OBSERVE_PAUSE_MS = 220
+DEFAULT_CLICK_RIPPLE_MS = 150
+DEFAULT_CLICK_RIPPLE_RADIUS = 18
+DEFAULT_TRAIL_TAIL_MS = 140
+
 FROZEN_ACTION_TYPES = ("move", "click", "drag", "scroll", "focus", "type")
 FROZEN_PHASE_FLOW = (
     MotionPhase.PLANNED,
@@ -141,7 +149,7 @@ class VirtualCursorState:
 class MotionScheduler:
     """Motion scheduler with virtual cursor planning and execution state tracking."""
 
-    def __init__(self, *, default_duration_ms: int = 180, cursor_state: VirtualCursorState | None = None, seed: int = 7, debug_show_points: bool = False, debug_show_target: bool = False) -> None:
+    def __init__(self, *, default_duration_ms: int = DEFAULT_CLICK_PREMOVE_MS, cursor_state: VirtualCursorState | None = None, seed: int = 7, debug_show_points: bool = False, debug_show_target: bool = False) -> None:
         self.default_duration_ms = default_duration_ms
         self.cursor_state = cursor_state or VirtualCursorState()
         self._pathgen = PathGenerator(seed=seed)
@@ -152,6 +160,8 @@ class MotionScheduler:
         return self._pathgen.build(action, steps=steps)
 
     def plan(self, *, kind: str, start: tuple[int, int], end: tuple[int, int], duration_ms: int | None = None, metadata: dict[str, Any] | None = None, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0, action_id: str | None = None) -> MotionAction:
+        if duration_ms is None:
+            duration_ms = DEFAULT_LONG_MOVE_MS if kind == "move" else DEFAULT_DRAG_MS if kind == "drag" else DEFAULT_CLICK_PREMOVE_MS
         metadata = metadata or {}
         return MotionAction(
             kind=kind,
