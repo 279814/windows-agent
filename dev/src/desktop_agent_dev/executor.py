@@ -111,6 +111,24 @@ class Executor:
             self._sync_overlay_from_context(active_window=active, phase="focused", kind="window_focus", target=None)
         return active
 
+    def _run_input_with_recovery(self, *, operation: str, recover_name: str | None = None, recover_handle: int | None = None, recover_pid: int | None = None, runner):
+        attempt_notes: list[dict[str, Any]] = []
+        before = self._ensure_window_ready(recover_name, recover_handle, recover_pid)
+        if before is not None:
+            attempt_notes.append({"step": "ensure_window_ready", "window": before.get("name"), "handle": before.get("handle")})
+        try:
+            result = runner()
+        except Exception as exc:
+            attempt_notes.append({"step": "runner_error", "error": str(exc)})
+            before_retry = self._ensure_window_ready(recover_name, recover_handle, recover_pid)
+            attempt_notes.append({"step": "recover_window", "window": None if before_retry is None else before_retry.get("name"), "handle": None if before_retry is None else before_retry.get("handle")})
+            result = runner()
+        if result.payload is None:
+            result.payload = {}
+        result.payload["recovery_attempts"] = attempt_notes
+        result.payload["overlay_state"] = self._overlay_snapshot_payload()
+        return result
+
     def _task_motion_event(self, *, kind: str, phase: MotionPhase, action: MotionAction | None = None, error_message: str | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "kind": kind,
@@ -790,76 +808,85 @@ class Executor:
         }
 
     def click(self, x: int, y: int, button: str = "left", clicks: int = 1, hover_ms: int = 80, jitter_px: int = 1) -> InputResult:
-        element = self._hit_test_element(x, y)
-        hover_motion = self._virtual_mouse_motion("hover", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
-        settle_motion = self._virtual_mouse_motion("move", (x, y), (x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1)
-        virtual_mouse = self._virtual_mouse_motion("click", (x, y), (x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0)
-        payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element, "pre_click_hover": hover_motion, "pre_click_settle": settle_motion, **virtual_mouse}
-        self._overlay_renderer.show()
-        self._overlay_renderer.update_cursor(x, y)
-        self._overlay_renderer.draw_click_ripple(x, y, radius=max(14, 12 + clicks * 4))
-        if self._backend is None:
-            payload["overlay_state"] = self._overlay_snapshot_payload()
-            return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
+        def runner() -> InputResult:
+            element = self._hit_test_element(x, y)
+            hover_motion = self._virtual_mouse_motion("hover", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
+            settle_motion = self._virtual_mouse_motion("move", (x, y), (x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1)
+            virtual_mouse = self._virtual_mouse_motion("click", (x, y), (x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0)
+            payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element, "pre_click_hover": hover_motion, "pre_click_settle": settle_motion, **virtual_mouse}
+            self._overlay_renderer.show()
+            self._overlay_renderer.update_cursor(x, y)
+            self._overlay_renderer.draw_click_ripple(x, y, radius=max(14, 12 + clicks * 4))
+            if self._backend is None:
+                payload["overlay_state"] = self._overlay_snapshot_payload()
+                return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
 
-        if hasattr(self._backend, "click"):
-            self._backend.click((x, y), button=button, clicks=clicks)
-            payload["overlay_state"] = self._overlay_snapshot_payload()
-            return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
+            if hasattr(self._backend, "click"):
+                self._backend.click((x, y), button=button, clicks=clicks)
+                payload["overlay_state"] = self._overlay_snapshot_payload()
+                return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
 
-        raise ExecutorError("Backend does not expose click().")
+            raise ExecutorError("Backend does not expose click().")
+
+        return self._run_input_with_recovery(operation="click", runner=runner)
 
     def move(self, x: int, y: int, steps: int = 8, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0) -> InputResult:
-        motion = self._virtual_mouse_motion("move", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
-        payload = {"x": x, "y": y, "element": self._hit_test_element(x, y), **motion}
-        self._overlay_renderer.show()
-        self._overlay_renderer.update_cursor(x, y)
-        self._overlay_renderer.attach_motion(motion.get("phase", "move"), {"kind": "move", "steps": len(motion.get("path", [])), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "last_target": {"x": x, "y": y}})
-        if self._backend is None:
-            payload["overlay_state"] = self._overlay_snapshot_payload()
-            return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
+        def runner() -> InputResult:
+            motion = self._virtual_mouse_motion("move", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+            payload = {"x": x, "y": y, "element": self._hit_test_element(x, y), **motion}
+            self._overlay_renderer.show()
+            self._overlay_renderer.update_cursor(x, y)
+            self._overlay_renderer.attach_motion(motion.get("phase", "move"), {"kind": "move", "steps": len(motion.get("path", [])), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "last_target": {"x": x, "y": y}})
+            if self._backend is None:
+                payload["overlay_state"] = self._overlay_snapshot_payload()
+                return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
 
-        if hasattr(self._backend, "move"):
-            self._backend.move((x, y))
-            payload["overlay_state"] = self._overlay_snapshot_payload()
-            return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
+            if hasattr(self._backend, "move"):
+                self._backend.move((x, y))
+                payload["overlay_state"] = self._overlay_snapshot_payload()
+                return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
 
-        raise ExecutorError("Backend does not expose move().")
+            raise ExecutorError("Backend does not expose move().")
+
+        return self._run_input_with_recovery(operation="move", runner=runner)
 
     def drag(self, start: tuple[int, int], end: tuple[int, int], steps: int = 16, hover_ms: int = 120, jitter_px: int = 1, accel: float = 1.0, decel: float = 1.1) -> InputResult:
-        before_context = self._input_context_snapshot()
-        hover_motion = self._virtual_mouse_motion("hover", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), start, steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
-        virtual_mouse = self._virtual_mouse_motion("drag", start, end, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
-        payload = {
-            "start": {"x": start[0], "y": start[1], "element": self._hit_test_element(start[0], start[1])},
-            "end": {"x": end[0], "y": end[1], "element": self._hit_test_element(end[0], end[1])},
-            "active_window_before": before_context["active_window"],
-            "focused_control_before": before_context["focused_control"],
-            "pre_drag_hover": hover_motion,
-            **virtual_mouse,
-        }
-        self._overlay_renderer.show()
-        self._overlay_renderer.set_drag_state(True, start={"x": start[0], "y": start[1]})
-        self._overlay_renderer.update_cursor(start[0], start[1])
-        if self._backend is None:
-            self._overlay_renderer.update_cursor(end[0], end[1])
-            self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
-            payload["overlay_state"] = self._overlay_snapshot_payload()
-            return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", payload=payload, tool="input_drag")
+        def runner() -> InputResult:
+            before_context = self._input_context_snapshot()
+            hover_motion = self._virtual_mouse_motion("hover", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), start, steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
+            virtual_mouse = self._virtual_mouse_motion("drag", start, end, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+            payload = {
+                "start": {"x": start[0], "y": start[1], "element": self._hit_test_element(start[0], start[1])},
+                "end": {"x": end[0], "y": end[1], "element": self._hit_test_element(end[0], end[1])},
+                "active_window_before": before_context["active_window"],
+                "focused_control_before": before_context["focused_control"],
+                "pre_drag_hover": hover_motion,
+                **virtual_mouse,
+            }
+            self._overlay_renderer.show()
+            self._overlay_renderer.set_drag_state(True, start={"x": start[0], "y": start[1]})
+            self._overlay_renderer.update_cursor(start[0], start[1])
+            if self._backend is None:
+                self._overlay_renderer.update_cursor(end[0], end[1])
+                self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+                payload["overlay_state"] = self._overlay_snapshot_payload()
+                return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", payload=payload, tool="input_drag")
 
-        if hasattr(self._backend, "move") and hasattr(self._backend, "drag"):
-            self._backend.move(start)
-            self._backend.drag(end)
-            after_context = self._input_context_snapshot()
-            payload["active_window_after"] = after_context["active_window"]
-            payload["focused_control_after"] = after_context["focused_control"]
-            self._overlay_renderer.update_cursor(end[0], end[1])
-            self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
-            payload["overlay_state"] = self._overlay_snapshot_payload()
-            return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", payload=payload, tool="input_drag")
+            if hasattr(self._backend, "move") and hasattr(self._backend, "drag"):
+                self._backend.move(start)
+                self._backend.drag(end)
+                after_context = self._input_context_snapshot()
+                payload["active_window_after"] = after_context["active_window"]
+                payload["focused_control_after"] = after_context["focused_control"]
+                self._overlay_renderer.update_cursor(end[0], end[1])
+                self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+                payload["overlay_state"] = self._overlay_snapshot_payload()
+                return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", payload=payload, tool="input_drag")
 
-        self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
-        raise ExecutorError("Backend does not expose drag support.")
+            self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+            raise ExecutorError("Backend does not expose drag support.")
+
+        return self._run_input_with_recovery(operation="drag", runner=runner)
 
     def type_text(
         self,
@@ -868,18 +895,19 @@ class Executor:
         clear: bool = False,
         caret_position: str = "idle",
     ) -> InputResult:
-        if self._backend is None:
-            suffix = ":enter" if press_enter else ""
-            payload = {
-                "text": text,
-                "press_enter": press_enter,
-                "clear": clear,
-                "caret_position": caret_position,
-                "validation": {"passed": True, "expected_change": False, "changed": None},
-            }
-            self._overlay_renderer.attach_motion("typing", {"kind": "type", "last_target": None})
-            payload["overlay_state"] = self._overlay_snapshot_payload()
-            return self._result("input_type", f"typed:{text}{suffix}", payload=payload, tool="input_type")
+        def runner() -> InputResult:
+            if self._backend is None:
+                suffix = ":enter" if press_enter else ""
+                payload = {
+                    "text": text,
+                    "press_enter": press_enter,
+                    "clear": clear,
+                    "caret_position": caret_position,
+                    "validation": {"passed": True, "expected_change": False, "changed": None},
+                }
+                self._overlay_renderer.attach_motion("typing", {"kind": "type", "last_target": None})
+                payload["overlay_state"] = self._overlay_snapshot_payload()
+                return self._result("input_type", f"typed:{text}{suffix}", payload=payload, tool="input_type")
 
         if hasattr(self._backend, "type"):
             focused_before = None
@@ -1007,22 +1035,26 @@ class Executor:
         raise ExecutorError("Backend does not expose multi_edit().")
 
     def shortcut(self, keys: str) -> InputResult:
-        if self._backend is None:
-            return self._result(
-                "shortcut",
-                f"shortcut:{keys}",
-                payload={
-                    "keys": keys,
-                    "target_window": None,
-                    "focus_before": None,
-                    "focus_after": None,
-                    "focus_changed": None,
-                    "injection_result": {"status": "sent", "method": "backend.shortcut.synthetic"},
-                },
-                tool="input_shortcut",
-            )
+        def runner() -> InputResult:
+            if self._backend is None:
+                return self._result(
+                    "shortcut",
+                    f"shortcut:{keys}",
+                    payload={
+                        "keys": keys,
+                        "target_window": None,
+                        "focus_before": None,
+                        "focus_after": None,
+                        "focus_changed": None,
+                        "injection_result": {"status": "sent", "method": "backend.shortcut.synthetic"},
+                        "overlay_state": self._overlay_snapshot_payload(),
+                    },
+                    tool="input_shortcut",
+                )
 
-        if hasattr(self._backend, "shortcut"):
+            if not hasattr(self._backend, "shortcut"):
+                raise ExecutorError("Backend does not expose shortcut().")
+
             focus_before = None
             target_window = None
             try:
@@ -1062,7 +1094,7 @@ class Executor:
             }
             return self._result("input_shortcut", f"shortcut:{keys}", payload=payload, tool="input_shortcut")
 
-        raise ExecutorError("Backend does not expose shortcut().")
+        return self._run_input_with_recovery(operation="shortcut", runner=runner)
 
     def scroll(self, direction: str, amount: int = 1) -> InputResult:
         before_context = self._input_context_snapshot()
