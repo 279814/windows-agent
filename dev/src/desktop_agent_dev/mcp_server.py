@@ -73,6 +73,7 @@ class DesktopMCPServer:
                 "implementation_status": tool["implementation_status"],
                 "verification_semantics": tool["verification_semantics"],
                 "targeting_semantics": tool["targeting_semantics"],
+                "discoverability": tool.get("discoverability"),
                 "safety_notes": tool.get("safety_notes"),
                 "param_description": tool.get("param_description"),
                 "result_description": tool.get("result_description"),

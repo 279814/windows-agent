@@ -31,13 +31,14 @@ TOOL_GROUP_TITLES = {
 TODO_PLACEHOLDER_TOOLS = ("ocr_extract", "ui_match", "vision_capture", "vision_locate")
 
 RESOURCE_DESCRIPTIONS: dict[str, str] = {
-    "desktop-agent-dev://manifest": "Machine-readable MCP manifest covering resource links, verification semantics, window handle/pid targeting, multi-source verification rules, and TODO placeholders.",
-    "desktop-agent-dev://readme": "Project overview and operator guidance for desktop observation, input, window control, motion preview, overlay state, and task orchestration, with verification semantics and TODO placeholders.",
-    "desktop-agent-dev://catalog": "Grouped tool catalog with normalized metadata, implementation status, verification semantics, targeting notes, examples, and TODO placeholders.",
-    "desktop-agent-dev://capabilities": "Capability matrix, client hints, risk posture, verification affordances, and explicit TODO placeholder status.",
-    "desktop-agent-dev://security": "Permission model and high-risk action policy, including verification-oriented operating guidance and placeholder caveats.",
-    "desktop-agent-dev://tool-handbook": "Client-readable handbook that explains tool usage, verification semantics, handle/pid target selection, payload expectations, motion preview, overlay state, and TODO placeholders.",
-    "desktop-agent-dev://tool-index": "Normalized tool index for MCP clients with implementation status, verification semantics, targeting semantics, result semantics, and TODO placeholders.",
+    "desktop-agent-dev://manifest": "Machine-readable MCP manifest covering resource links, verification semantics, window handle/pid targeting, multi-source verification rules, tool discoverability, and TODO placeholders.",
+    "desktop-agent-dev://readme": "Project overview and operator guidance for desktop observation, input, window control, motion preview, overlay state, and task orchestration, with verification semantics and discoverability guidance.",
+    "desktop-agent-dev://catalog": "Grouped tool catalog with normalized metadata, implementation status, verification semantics, targeting notes, example payloads, and tool discoverability fields.",
+    "desktop-agent-dev://capabilities": "Capability matrix, client hints, risk posture, verification affordances, discoverability metadata, and explicit TODO placeholder status.",
+    "desktop-agent-dev://security": "Permission model and high-risk action policy, including verification-oriented operating guidance, discoverability notes, and placeholder caveats.",
+    "desktop-agent-dev://tool-handbook": "Client-readable handbook that explains tool usage, verification semantics, handle/pid target selection, payload expectations, motion preview, overlay state, and discoverability cues.",
+    "desktop-agent-dev://tool-index": "Normalized tool index for MCP clients with implementation status, verification semantics, targeting semantics, result semantics, discoverability hints, and TODO placeholders.",
+    "desktop-agent-dev://tool-discovery": "Compact client-facing discovery catalog with resource links, grouped tool cards, focus tools, and searchable descriptions for each tool.",
 }
 
 RESOURCE_TITLES: dict[str, str] = {
@@ -48,6 +49,7 @@ RESOURCE_TITLES: dict[str, str] = {
     "desktop-agent-dev://security": "Security",
     "desktop-agent-dev://tool-handbook": "Tool Handbook",
     "desktop-agent-dev://tool-index": "Tool Index",
+    "desktop-agent-dev://tool-discovery": "Tool Discovery",
 }
 
 
@@ -88,6 +90,7 @@ class ToolRegistry:
             "desktop-agent-dev://security",
             "desktop-agent-dev://tool-handbook",
             "desktop-agent-dev://tool-index",
+            "desktop-agent-dev://tool-discovery",
         )
         return [
             {
@@ -122,6 +125,21 @@ class ToolRegistry:
         if spec.kind == "task":
             return "Task tools return planner state rather than desktop-side effects. Verify progress through task_id, step_index, observations, and status."
         return "Use the normalized payload fields together with backend-specific detail fields when present."
+
+    def _tool_discoverability(self, spec: ToolSpec) -> str:
+        if spec.name in TODO_PLACEHOLDER_TOOLS:
+            return "hidden_until_implemented"
+        if spec.name in {"motion_preview", "overlay_state"}:
+            return "highlighted"
+        if spec.kind == "window" and spec.permission in {"launch_app", "close"}:
+            return "high_risk_visible"
+        if spec.kind == "input":
+            return "client_visible"
+        if spec.kind == "snapshot":
+            return "client_visible"
+        if spec.kind == "task":
+            return "client_visible"
+        return "client_visible"
 
     def _tool_targeting_semantics(self, spec: ToolSpec) -> str | None:
         properties = (spec.params_schema or {}).get("properties") or {}
@@ -166,6 +184,7 @@ class ToolRegistry:
                 "implementation_status": self._tool_implementation_status(spec),
                 "verification_semantics": self._tool_verification_semantics(spec),
                 "targeting_semantics": self._tool_targeting_semantics(spec),
+                "discoverability": self._tool_discoverability(spec),
             }
             for spec in self.specs.values()
         ]

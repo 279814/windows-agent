@@ -579,6 +579,17 @@ class Executor:
 
         return {"type": "unknown", "name": None, "found": False, "confidence": 0.0}
 
+    def _motion_steps_for_kind(self, kind: str, steps: int) -> int:
+        if kind == "hover":
+            return max(4, min(10, steps))
+        if kind == "click":
+            return max(2, min(4, steps))
+        if kind == "drag":
+            return max(8, steps)
+        if kind == "move":
+            return max(6, steps)
+        return max(2, steps)
+
     def _virtual_mouse_motion(
         self,
         kind: str,
@@ -591,10 +602,11 @@ class Executor:
         accel: float = 1.0,
         decel: float = 1.0,
     ) -> dict[str, Any]:
+        steps = self._motion_steps_for_kind(kind, steps)
         action = self._motion_scheduler.plan(kind=kind, start=start, end=end, duration_ms=duration_ms, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
         result = self._motion_scheduler.run(action, steps=steps)
         self._overlay_renderer.update_cursor(end[0], end[1])
-        self._overlay_renderer.attach_motion(result.phase.value, {"kind": kind, "steps": len(result.path), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel})
+        self._overlay_renderer.attach_motion(result.phase.value, {"kind": kind, "steps": len(result.path), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "duration_ms": result.action.duration_ms})
         overlay_snapshot = self._overlay_renderer.snapshot()
         return {
             "motion": {
@@ -628,8 +640,9 @@ class Executor:
     def click(self, x: int, y: int, button: str = "left", clicks: int = 1, hover_ms: int = 80, jitter_px: int = 1) -> InputResult:
         element = self._hit_test_element(x, y)
         hover_motion = self._virtual_mouse_motion("hover", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
-        virtual_mouse = self._virtual_mouse_motion("click", (x, y), (x, y), steps=2, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0)
-        payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element, "pre_click_hover": hover_motion, **virtual_mouse}
+        settle_motion = self._virtual_mouse_motion("move", (x, y), (x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1)
+        virtual_mouse = self._virtual_mouse_motion("click", (x, y), (x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0)
+        payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element, "pre_click_hover": hover_motion, "pre_click_settle": settle_motion, **virtual_mouse}
         if self._backend is None:
             return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
 
