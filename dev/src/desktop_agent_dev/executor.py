@@ -805,19 +805,118 @@ class Executor:
 
         raise ExecutorError("Backend does not expose launch_app().")
 
-    def switch_window(self, name: str) -> InputResult:
+    @staticmethod
+    def _normalize_window_name(value: Any) -> str:
+        if value is None:
+            return ""
+        normalized = re.sub(r"\s+", " ", str(value)).strip().casefold()
+        normalized = re.sub(r"^[*•●\s]+", "", normalized)
+        return normalized.strip()
+
+    def _window_name_candidates(self, snapshot: dict[str, Any] | None) -> set[str]:
+        if snapshot is None:
+            return set()
+        candidates: set[str] = set()
+        for key in ("name", "window_title"):
+            normalized = self._normalize_window_name(snapshot.get(key))
+            if normalized:
+                candidates.add(normalized)
+        return candidates
+
+    @staticmethod
+    def _window_status(snapshot: dict[str, Any] | None) -> str:
+        if snapshot is None:
+            return ""
+        return str(snapshot.get("status") or "").strip().casefold()
+
+    def _window_is_minimized(self, snapshot: dict[str, Any] | None) -> bool:
+        return self._window_status(snapshot).endswith("minimized")
+
+    def _window_is_maximized(self, snapshot: dict[str, Any] | None) -> bool:
+        return self._window_status(snapshot).endswith("maximized")
+
+    @staticmethod
+    def _window_same_target(left: dict[str, Any] | None, right: dict[str, Any] | None) -> bool:
+        if left is None or right is None:
+            return False
+        left_handle = left.get("handle")
+        right_handle = right.get("handle")
+        if left_handle is not None and right_handle is not None:
+            return left_handle == right_handle
+        left_pid = left.get("pid")
+        right_pid = right.get("pid")
+        if left_pid is not None and right_pid is not None:
+            return left_pid == right_pid
+        return False
+
+    def _window_bounds_area(self, snapshot: dict[str, Any] | None) -> int | None:
+        if snapshot is None:
+            return None
+        bounds = snapshot.get("bounds")
+        if not isinstance(bounds, (list, tuple)) or len(bounds) != 4:
+            return None
+        left, top, right, bottom = bounds
+        try:
+            return max(0, int(right) - int(left)) * max(0, int(bottom) - int(top))
+        except Exception:
+            return None
+
+    def _resolve_target_window(
+        self,
+        *,
+        name: str | None = None,
+        handle: int | None = None,
+        pid: int | None = None,
+        refresh: bool = False,
+        prefer_active: bool = False,
+    ) -> tuple[dict[str, Any] | None, str]:
+        matched_by = "active"
+        if handle is not None:
+            matched_by = "handle"
+        elif pid is not None:
+            matched_by = "pid"
+        elif name:
+            matched_by = "name"
+        return (
+            self._find_window_snapshot(name=name, handle=handle, pid=pid, refresh=refresh, prefer_active=prefer_active),
+            matched_by,
+        )
+
+    def _poll_window_observations(
+        self,
+        *,
+        name: str | None = None,
+        handle: int | None = None,
+        pid: int | None = None,
+        prefer_active: bool = False,
+        attempts: int = 5,
+        delay: float = 0.1,
+    ) -> list[dict[str, Any]]:
+        observations: list[dict[str, Any]] = []
+        for index in range(max(1, attempts)):
+            visible = self._snapshot_windows(refresh=True)
+            active = visible[0] if visible else None
+            target = self._find_window_snapshot(name=name, handle=handle, pid=pid, refresh=False, prefer_active=prefer_active)
+            observations.append({"target": target, "active": active, "visible": visible})
+            if index + 1 < attempts:
+                time.sleep(delay)
+        return observations
+
+    def switch_window(self, name: str, handle: int | None = None, pid: int | None = None) -> InputResult:
         previous = self._snapshot_window(refresh=True)
+        target_before, matched_by = self._resolve_target_window(name=name, handle=handle, pid=pid, refresh=True, prefer_active=True)
+        target_label = (target_before or {}).get("name") or name
         if self._backend is None:
             return self._result(
                 "window_switch",
                 f"switch:{name}",
                 payload={
-                    **self._window_payload(target_window=name, before=previous, after={"name": name, "status": None, "handle": None}),
+                    **self._window_payload(target_window=target_label, before=previous, after={"name": target_label, "status": None, "handle": handle}),
                     "previous_window": previous.get("name") if previous else None,
                     "previous_handle": previous.get("handle") if previous else None,
-                    "current_window": name,
-                    "current_handle": None,
-                    "matched_by": "name",
+                    "current_window": target_label,
+                    "current_handle": handle,
+                    "matched_by": matched_by,
                     "restored_from_minimized": False,
                     "verified": False,
                 },
@@ -825,21 +924,36 @@ class Executor:
             )
 
         if hasattr(self._backend, "switch_app"):
-            response = self._backend.switch_app(name)
+            response = self._backend.switch_app(target_label)
             detail, status = self._normalize_backend_response(response)
-            current = self._find_window_snapshot(name=name, refresh=True, prefer_active=True)
+            current, current_matched_by = self._resolve_target_window(
+                name=name,
+                handle=handle or (target_before or {}).get("handle"),
+                pid=pid or (target_before or {}).get("pid"),
+                refresh=True,
+                prefer_active=True,
+            )
             if current is None:
                 current = self._snapshot_window(refresh=True)
-            verified = bool(status in (None, 0) and current and self._window_name_matches(current, name))
-            restored_from_minimized = bool(previous and str(previous.get("status", "")).lower() == "minimized")
+            verified = bool(
+                status in (None, 0)
+                and current
+                and (
+                    self._window_name_matches(current, name)
+                    or self._window_same_target(current, target_before)
+                    or (handle is not None and current.get("handle") == handle)
+                    or (pid is not None and current.get("pid") == pid)
+                )
+            )
+            restored_from_minimized = self._window_is_minimized(target_before)
             payload = {
-                **self._window_payload(target_window=name, before=previous, after=current),
+                **self._window_payload(target_window=target_label, before=previous, after=current),
                 "name": name,
                 "previous_window": previous.get("name") if previous else None,
                 "previous_handle": previous.get("handle") if previous else None,
                 "current_window": current.get("name") if current else None,
                 "current_handle": current.get("handle") if current else None,
-                "matched_by": "name",
+                "matched_by": current_matched_by,
                 "restored_from_minimized": restored_from_minimized,
                 "backend_response": response,
                 "backend_response_detail": detail,
@@ -850,15 +964,56 @@ class Executor:
 
         raise ExecutorError("Backend does not expose switch_app().")
 
-    def focus_window(self, name: str) -> InputResult:
+    def focus_window(self, name: str, handle: int | None = None, pid: int | None = None) -> InputResult:
         if self._backend is None:
             return self._result("window_focus", f"focus:{name}", tool="window_focus")
 
         if hasattr(self._backend, "focus_app"):
-            response = self._backend.focus_app(name)
-            return self._result("window_focus", str(response), tool="window_focus")
+            previous = self._snapshot_window(refresh=True)
+            target_before, matched_by = self._resolve_target_window(name=name, handle=handle, pid=pid, refresh=True, prefer_active=True)
+            target_label = (target_before or {}).get("name") or name
+            response = self._backend.focus_app(target_label)
+            detail, status = self._normalize_backend_response(response)
+            current, current_matched_by = self._resolve_target_window(
+                name=name,
+                handle=handle or (target_before or {}).get("handle"),
+                pid=pid or (target_before or {}).get("pid"),
+                refresh=True,
+                prefer_active=True,
+            )
+            verified = bool(
+                status in (None, 0)
+                and current
+                and (
+                    self._window_same_target(current, target_before)
+                    or self._window_name_matches(current, name)
+                    or (handle is not None and current.get("handle") == handle)
+                    or (pid is not None and current.get("pid") == pid)
+                )
+            )
+            return self._result(
+                "window_focus",
+                detail,
+                ok=verified,
+                payload={
+                    **self._window_payload(target_window=target_label, before=previous, after=current),
+                    "name": name,
+                    "previous_window": previous.get("name") if previous else None,
+                    "previous_handle": previous.get("handle") if previous else None,
+                    "current_window": current.get("name") if current else None,
+                    "current_handle": current.get("handle") if current else None,
+                    "matched_by": current_matched_by or matched_by,
+                    "restored_from_minimized": self._window_is_minimized(target_before),
+                    "backend_response": response,
+                    "backend_response_detail": detail,
+                    "backend_response_code": status,
+                    "verified": verified,
+                    "strategy": "focus_app",
+                },
+                tool="window_focus",
+            )
 
-        result = self.switch_window(name)
+        result = self.switch_window(name, handle=handle, pid=pid)
         if result.payload is None:
             result.payload = {}
         result.action = "window_focus"
@@ -866,93 +1021,39 @@ class Executor:
         result.payload["strategy"] = "switch_window"
         return result
 
-    def close_window(self, name: str) -> InputResult:
-        def _normalize_backend_response(response: Any) -> tuple[str, int | None]:
-            if isinstance(response, tuple) and len(response) >= 2:
-                return str(response[0]), response[1] if isinstance(response[1], int) else None
-            return str(response), 0
+    def close_window(self, name: str, handle: int | None = None, pid: int | None = None) -> InputResult:
+        def _capture_state() -> dict[str, Any]:
+            windows = self._snapshot_windows(refresh=True)
+            return {"active_window": windows[0] if windows else None, "windows": windows}
 
-        def _window_record(window: Any) -> dict[str, Any] | None:
-            if window is None:
-                return None
-            if isinstance(window, dict):
-                return {
-                    "name": window.get("name") or window.get("window_title"),
-                    "handle": window.get("handle"),
-                    "status": window.get("status"),
-                    "window_title": window.get("window_title") or window.get("name"),
-                }
-            return {
-                "name": getattr(window, "name", None) or getattr(window, "window_title", None),
-                "handle": getattr(window, "handle", None),
-                "status": getattr(window, "status", None),
-                "window_title": getattr(window, "window_title", None) or getattr(window, "name", None),
-            }
+        def _matching_windows(snapshot: dict[str, Any] | None) -> list[dict[str, Any]]:
+            if snapshot is None:
+                return []
+            windows = list(snapshot.get("windows", []) or [])
+            matches: list[dict[str, Any]] = []
+            normalized_name = self._normalize_window_name(name)
+            for window in windows:
+                if handle is not None and window.get("handle") == handle:
+                    matches.append(window)
+                    continue
+                if pid is not None and window.get("pid") == pid:
+                    matches.append(window)
+                    continue
+                if handle is None and pid is None and normalized_name and self._window_name_matches(window, name):
+                    matches.append(window)
+            return matches
 
-        def _window_signature(state: Any) -> dict[str, Any] | None:
-            if state is None:
-                return None
-            active = getattr(state, "active_window", None)
-            windows = getattr(state, "windows", None)
-            if windows is None and isinstance(state, dict):
-                active = state.get("active_window")
-                windows = state.get("windows")
-            window_list = []
-            if isinstance(windows, list):
-                for window in windows:
-                    record = _window_record(window)
-                    if record is not None:
-                        window_list.append(record)
-            return {"active_window": _window_record(active), "windows": window_list}
-
-        def _capture_state() -> dict[str, Any] | None:
-            getter = getattr(self._backend, "get_state", None)
-            if not callable(getter):
-                return None
-            try:
-                state = getter(use_vision=False, as_bytes=False)
-            except TypeError:
-                try:
-                    state = getter()
-                except Exception:
-                    return None
-            except Exception:
-                return None
-            return _window_signature(state)
-
-        def _close_outcome(before: dict[str, Any] | None, after: dict[str, Any] | None, detail: str, exit_code: int | None, strategy: str, backend_response: Any, requested_close_path: str) -> InputResult:
-            before_active = before.get("active_window") if before else None
-            after_active = after.get("active_window") if after else None
-            before_name = before_active.get("name") if before_active else None
-            target_label = name
-
-            def _find_window(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
-                if snapshot is None:
-                    return None
-                for window in snapshot.get("windows", []):
-                    if not isinstance(window, dict):
-                        continue
-                    candidate_name = window.get("name") or window.get("window_title")
-                    candidate_title = window.get("window_title") or candidate_name
-                    if candidate_name == target_label or candidate_title == target_label:
-                        return window
-                active_window = snapshot.get("active_window")
-                if isinstance(active_window, dict):
-                    candidate_name = active_window.get("name") or active_window.get("window_title")
-                    candidate_title = active_window.get("window_title") or candidate_name
-                    if candidate_name == target_label or candidate_title == target_label:
-                        return active_window
-                return None
-
-            before_target = _find_window(before)
-            after_target = _find_window(after)
-            before_handle = before_target.get("handle") if before_target else None
-            after_handle = after_target.get("handle") if after_target else None
-            before_present = before_target is not None
-            after_present = after_target is not None
-            gone = before_present and not after_present
-            changed = before_handle is not None and after_handle is not None and after_handle != before_handle
-            verified = gone or changed
+        def _close_outcome(before: dict[str, Any] | None, after: dict[str, Any] | None, detail: str, exit_code: int | None, strategy: str, backend_response: Any, requested_close_path: str, matched_by: str, target_label: str) -> InputResult:
+            before_matches = _matching_windows(before)
+            after_matches = _matching_windows(after)
+            before_target = before_matches[0] if before_matches else None
+            after_target = after_matches[0] if after_matches else None
+            before_present = bool(before_matches)
+            after_present = bool(after_matches)
+            count_decreased = len(before_matches) > len(after_matches)
+            handle_gone = bool(handle is not None and before_present and not after_present)
+            pid_decreased = bool(pid is not None and len(before_matches) > len(after_matches))
+            verified = handle_gone or pid_decreased or count_decreased
             normalized_detail = detail
             normalized_exit_code = exit_code
             normalized_backend_response = backend_response
@@ -971,12 +1072,8 @@ class Executor:
                 normalized_exit_code = 0
                 normalized_backend_response = (normalized_detail, 0)
             elif before_present:
-                outcome = "execution_failed"
                 normalized_exit_code = normalized_exit_code if normalized_exit_code not in (None, 0) else 1
-                if detail.lower().startswith(("failed", "error")):
-                    normalized_detail = detail
-                else:
-                    normalized_detail = f"Close verification failed for {target_label}."
+                normalized_detail = detail if detail.lower().startswith(("failed", "error")) else f"Close verification failed for {target_label}."
 
             return self._result(
                 "window_close",
@@ -985,14 +1082,30 @@ class Executor:
                 payload={
                     "name": name,
                     "target_window": target_label,
+                    "matched_by": matched_by,
                     "close_strategy": strategy,
                     "requested_close_path": requested_close_path,
                     "backend_response": normalized_backend_response,
                     "exit_code": normalized_exit_code,
                     "before_window": before,
                     "after_window": after,
+                    "before_match_count": len(before_matches),
+                    "after_match_count": len(after_matches),
                     "post_close_verified": verified,
                     "outcome": outcome if ok or before_present else "capability_missing",
+                    "target_handle": handle or (before_target or {}).get("handle"),
+                    "target_pid": pid or (before_target or {}).get("pid"),
+                    "verification_mode": (
+                        "handle_removed"
+                        if handle_gone
+                        else "pid_count_decreased"
+                        if pid_decreased
+                        else "name_count_decreased"
+                        if count_decreased
+                        else "unverified"
+                    ),
+                    "before_target_window": before_target,
+                    "after_target_window": after_target,
                 },
                 tool="window_close",
             )
@@ -1018,19 +1131,21 @@ class Executor:
             )
 
         before = _capture_state()
+        target_before, matched_by = self._resolve_target_window(name=name, handle=handle, pid=pid, refresh=False, prefer_active=True)
+        target_label = (target_before or {}).get("name") or name
         close_app = getattr(self._backend, "close_app", None)
         if callable(close_app):
-            response = close_app(name)
-            detail, exit_code = _normalize_backend_response(response)
+            response = close_app(target_label)
+            detail, exit_code = self._normalize_backend_response(response)
             after = _capture_state()
-            return _close_outcome(before, after, detail, exit_code, "backend.close_app", response, "wm_close")
+            return _close_outcome(before, after, detail, exit_code, "backend.close_app", response, "wm_close", matched_by, target_label)
 
         kill_process = getattr(self._backend, "kill_process", None)
         if callable(kill_process):
-            response = kill_process(name=name, force=False)
-            detail, exit_code = _normalize_backend_response(response)
+            response = kill_process(name=target_label, force=False)
+            detail, exit_code = self._normalize_backend_response(response)
             after = _capture_state()
-            result = _close_outcome(before, after, detail, exit_code, "backend.kill_process", response, "kill_process")
+            result = _close_outcome(before, after, detail, exit_code, "backend.kill_process", response, "kill_process", matched_by, target_label)
             if result.payload is not None:
                 result.payload["outcome"] = "success_wm_close_degraded" if result.ok else result.payload.get("outcome", "execution_failed")
             return result
@@ -1054,21 +1169,29 @@ class Executor:
             tool="window_close",
         )
 
-    def _snapshot_window(self, name: str | None = None, refresh: bool = False) -> dict[str, Any] | None:
+    def _snapshot_window(
+        self,
+        name: str | None = None,
+        refresh: bool = False,
+        *,
+        handle: int | None = None,
+        pid: int | None = None,
+        prefer_active: bool = False,
+    ) -> dict[str, Any] | None:
         backend = self._backend
         if backend is None:
             return None
 
         try:
-            if name is None:
+            if name is None and handle is None and pid is None:
                 windows = self._snapshot_windows(refresh=refresh)
                 return windows[0] if windows else None
 
-            snapshot = self._find_window_snapshot(name=name, refresh=refresh, prefer_active=True)
+            snapshot = self._find_window_snapshot(name=name, handle=handle, pid=pid, refresh=refresh, prefer_active=prefer_active)
             if snapshot is not None:
                 return snapshot
 
-            if refresh and name is not None:
+            if refresh and name is not None and handle is None and pid is None:
                 find_window = getattr(backend, "_find_window_by_name", None)
                 if callable(find_window):
                     try:
@@ -1090,13 +1213,19 @@ class Executor:
                 "name": window.get("name") or window.get("window_title"),
                 "status": getattr(window.get("status"), "name", None) or window.get("status"),
                 "handle": window.get("handle"),
+                "pid": window.get("pid") or window.get("process_id"),
                 "window_title": window.get("window_title") or window.get("name"),
+                "bounds": window.get("bounds"),
+                "is_visible": window.get("is_visible"),
             }
         return {
             "name": getattr(window, "name", None) or getattr(window, "window_title", None),
             "status": getattr(getattr(window, "status", None), "name", None) or getattr(window, "status", None),
             "handle": getattr(window, "handle", None),
+            "pid": getattr(window, "pid", None) or getattr(window, "process_id", None),
             "window_title": getattr(window, "window_title", None) or getattr(window, "name", None),
+            "bounds": getattr(window, "bounds", None),
+            "is_visible": getattr(window, "is_visible", None),
         }
 
     def _snapshot_windows(self, refresh: bool = False) -> list[dict[str, Any]]:
@@ -1124,7 +1253,7 @@ class Executor:
                 snapshot = self._window_to_snapshot(candidate)
                 if snapshot is None:
                     continue
-                key = (snapshot.get("handle"), snapshot.get("name"), snapshot.get("window_title"))
+                key = (snapshot.get("handle"), snapshot.get("pid"), snapshot.get("name"), snapshot.get("window_title"))
                 if key in seen:
                     continue
                 seen.add(key)
@@ -1136,18 +1265,15 @@ class Executor:
     def _window_name_matches(self, snapshot: dict[str, Any] | None, name: str | None) -> bool:
         if snapshot is None or not name:
             return False
-        target = str(name).strip().lower()
-        candidates = {
-            str(snapshot.get("name") or "").strip().lower(),
-            str(snapshot.get("window_title") or "").strip().lower(),
-        }
-        return target in candidates
+        target = self._normalize_window_name(name)
+        return bool(target and target in self._window_name_candidates(snapshot))
 
     def _find_window_snapshot(
         self,
         *,
         name: str | None = None,
         handle: int | None = None,
+        pid: int | None = None,
         refresh: bool = False,
         prefer_active: bool = False,
     ) -> dict[str, Any] | None:
@@ -1159,6 +1285,13 @@ class Executor:
             for snapshot in windows:
                 if snapshot.get("handle") == handle:
                     return snapshot
+
+        if pid is not None:
+            pid_matches = [snapshot for snapshot in windows if snapshot.get("pid") == pid]
+            if pid_matches:
+                if prefer_active and windows[0].get("pid") == pid:
+                    return windows[0]
+                return pid_matches[0]
 
         if name is None:
             return windows[0]
@@ -1197,12 +1330,14 @@ class Executor:
     def resize_window(
         self,
         name: str | None = None,
+        handle: int | None = None,
+        pid: int | None = None,
         width: int | None = None,
         height: int | None = None,
         x: int | None = None,
         y: int | None = None,
     ) -> InputResult:
-        before = self._snapshot_window(name, refresh=True)
+        before = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
         before_status = str(before.get("status", "")).lower() if before else None
         if before is None:
             return self._result(
@@ -1241,9 +1376,9 @@ class Executor:
                 if callable(restore_app):
                     attempted_restore = True
                     try:
-                        restore_app(name=name)
+                        restore_app(name=target_name)
                     except Exception:
-                        after = self._snapshot_window(name, refresh=True)
+                        after = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
                         return self._result(
                             "window_resize",
                             f"restore failed for {target_name}",
@@ -1260,10 +1395,10 @@ class Executor:
                             },
                             tool="window_resize",
                         )
-                    before = self._snapshot_window(name, refresh=True) or before
+                    before = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True) or before
                     before_status = str(before.get("status", "")).lower() if before else before_status
                     if before_status == "minimized":
-                        after = self._snapshot_window(name, refresh=True)
+                        after = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
                         return self._result(
                             "window_resize",
                             f"restore failed for {target_name}",
@@ -1286,17 +1421,17 @@ class Executor:
                 restore_app = getattr(self._backend, "restore_app", None)
                 if callable(restore_app):
                     try:
-                        restore_app(name=name)
+                        restore_app(name=target_name)
                     except Exception:
                         pass
-                    before = self._snapshot_window(name, refresh=True) or before
+                    before = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True) or before
                     before_status = str(before.get("status", "")).lower() if before else before_status
                     if before_status != "maximized":
                         reason = None
             try:
-                response = self._backend.resize_app(name=name, size=size, loc=loc)
+                response = self._backend.resize_app(name=target_name, size=size, loc=loc)
             except Exception as exc:
-                after = self._snapshot_window(name, refresh=True)
+                after = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
                 return self._result(
                     "window_resize",
                     f"resize failed:{exc}",
@@ -1312,9 +1447,9 @@ class Executor:
                     tool="window_resize",
                 )
             detail, status = self._normalize_backend_response(response)
-            after = self._find_window_snapshot(handle=before.get("handle"), name=name, refresh=True)
+            after = self._find_window_snapshot(handle=before.get("handle"), pid=before.get("pid"), name=name, refresh=True)
             if after is None:
-                after = self._snapshot_window(name, refresh=True)
+                after = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
             after_status = str(after.get("status", "")).lower() if after else None
             verified = bool(status in (None, 0) and after and after_status not in {"minimized", "maximized"})
             ok_flag = verified
@@ -1338,8 +1473,8 @@ class Executor:
 
         raise ExecutorError("Backend does not expose resize_app().")
 
-    def minimize_window(self, name: str | None = None) -> InputResult:
-        before = self._snapshot_window(name, refresh=True) or {"name": name, "status": None, "handle": None}
+    def minimize_window(self, name: str | None = None, handle: int | None = None, pid: int | None = None) -> InputResult:
+        before = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True) or {"name": name, "status": None, "handle": handle, "pid": pid}
         if self._backend is None:
             return self._result(
                 "window_minimize",
@@ -1348,28 +1483,47 @@ class Executor:
                 tool="window_minimize",
             )
         if hasattr(self._backend, "minimize_app"):
-            response = self._backend.minimize_app(name=name)
+            response = self._backend.minimize_app(name=before.get("name") if before else name)
             detail, status = self._normalize_backend_response(response)
-            target_handle = before.get("handle") if before else None
-            after = self._find_window_snapshot(handle=target_handle, name=name, refresh=True)
-            active_after = self._snapshot_window(refresh=True)
-            visible_after = self._snapshot_windows(refresh=True)
-            target_handle_present_after = bool(
-                target_handle is not None and any(window.get("handle") == target_handle for window in visible_after)
-            )
-            after_status = str(after.get("status", "")).lower() if after else None
-            verified = bool(
-                status in (None, 0)
-                and (
-                    (after and after_status.endswith("minimized"))
-                    or (
-                        target_handle is not None
-                        and not target_handle_present_after
-                        and (active_after is None or active_after.get("handle") != target_handle)
-                    )
-                )
-            )
-            verification_mode = "status_minimized" if after and after_status.endswith("minimized") else ("handle_hidden_after_minimize" if verified else "unverified")
+            target_handle = handle or (before.get("handle") if before else None)
+            target_pid = pid or (before.get("pid") if before else None)
+            observations = self._poll_window_observations(name=name, handle=target_handle, pid=target_pid, attempts=6, delay=0.12)
+            after = observations[-1]["target"] if observations else None
+            active_after = observations[-1]["active"] if observations else None
+            visible_after = observations[-1]["visible"] if observations else []
+            target_handle_present_after = bool(target_handle is not None and any(window.get("handle") == target_handle for window in visible_after))
+            verification_mode = "unverified"
+            verified = False
+            if status in (None, 0):
+                for observation in observations:
+                    observed_target = observation["target"]
+                    observed_active = observation["active"]
+                    observed_visible = observation["visible"]
+                    target_handle_visible = bool(target_handle is not None and any(window.get("handle") == target_handle for window in observed_visible))
+                    if self._window_is_minimized(observed_target):
+                        after = observed_target
+                        active_after = observed_active
+                        visible_after = observed_visible
+                        target_handle_present_after = target_handle_visible
+                        verified = True
+                        verification_mode = "status_minimized"
+                        break
+                    if observed_target is not None and observed_target.get("is_visible") is False:
+                        after = observed_target
+                        active_after = observed_active
+                        visible_after = observed_visible
+                        target_handle_present_after = target_handle_visible
+                        verified = True
+                        verification_mode = "visibility_hidden_after_minimize"
+                        break
+                    if target_handle is not None and not target_handle_visible and (observed_active is None or observed_active.get("handle") != target_handle):
+                        after = observed_target
+                        active_after = observed_active
+                        visible_after = observed_visible
+                        target_handle_present_after = target_handle_visible
+                        verified = True
+                        verification_mode = "handle_hidden_after_minimize"
+                        break
             payload = {
                 **self._window_payload(target_window=before.get("name") if before else name, before=before, after=after),
                 "verified": verified,
@@ -1384,8 +1538,8 @@ class Executor:
             return self._result("window_minimize", detail, ok=verified, payload=payload, tool="window_minimize")
         raise ExecutorError("Backend does not expose minimize_app().")
 
-    def maximize_window(self, name: str | None = None) -> InputResult:
-        before = self._snapshot_window(name, refresh=True) or {"name": name, "status": None, "handle": None}
+    def maximize_window(self, name: str | None = None, handle: int | None = None, pid: int | None = None) -> InputResult:
+        before = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True) or {"name": name, "status": None, "handle": handle, "pid": pid}
         if self._backend is None:
             return self._result(
                 "window_maximize",
@@ -1394,15 +1548,49 @@ class Executor:
                 tool="window_maximize",
             )
         if hasattr(self._backend, "maximize_app"):
-            response = self._backend.maximize_app(name=name)
+            response = self._backend.maximize_app(name=before.get("name") if before else name)
             detail, status = self._normalize_backend_response(response)
-            after = self._find_window_snapshot(handle=before.get("handle"), name=name, refresh=True)
-            if after is None:
-                after = self._snapshot_window(name, refresh=True)
-            verified = bool(status in (None, 0) and after and str(after.get("status", "")).lower() == "maximized")
+            target_handle = handle or (before.get("handle") if before else None)
+            target_pid = pid or (before.get("pid") if before else None)
+            observations = self._poll_window_observations(name=name, handle=target_handle, pid=target_pid, prefer_active=True, attempts=6, delay=0.12)
+            after = observations[-1]["target"] if observations else None
+            verification_mode = "unverified"
+            verified = False
+            before_area = self._window_bounds_area(before)
+            if status in (None, 0):
+                for observation in observations:
+                    observed_target = observation["target"]
+                    observed_active = observation["active"]
+                    after_area = self._window_bounds_area(observed_target)
+                    if self._window_is_maximized(observed_target):
+                        after = observed_target
+                        verified = True
+                        verification_mode = "status_maximized"
+                        break
+                    if self._window_is_maximized(before) and self._window_same_target(observed_target, before):
+                        after = observed_target
+                        verified = True
+                        verification_mode = "already_maximized"
+                        break
+                    if (
+                        observed_target is not None
+                        and observed_active is not None
+                        and self._window_same_target(observed_target, observed_active)
+                        and "maximiz" in detail.casefold()
+                    ):
+                        after = observed_target
+                        verified = True
+                        verification_mode = "backend_ack_active_target"
+                        break
+                    if before_area and after_area and after_area > int(before_area * 1.15):
+                        after = observed_target
+                        verified = True
+                        verification_mode = "bounds_expanded"
+                        break
             payload = {
                 **self._window_payload(target_window=before.get("name") if before else name, before=before, after=after),
                 "verified": verified,
+                "verification_mode": verification_mode,
                 "backend_response": response,
                 "backend_response_detail": detail,
                 "backend_response_code": status,
@@ -1422,8 +1610,8 @@ class Executor:
             tool="window_maximize",
         )
 
-    def restore_window(self, name: str | None = None) -> InputResult:
-        before = self._snapshot_window(name, refresh=True) or {"name": name, "status": None, "handle": None}
+    def restore_window(self, name: str | None = None, handle: int | None = None, pid: int | None = None) -> InputResult:
+        before = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True) or {"name": name, "status": None, "handle": handle, "pid": pid}
         if self._backend is None:
             return self._result(
                 "window_restore",
@@ -1432,11 +1620,11 @@ class Executor:
                 tool="window_restore",
             )
         if hasattr(self._backend, "restore_app"):
-            response = self._backend.restore_app(name=name)
+            response = self._backend.restore_app(name=before.get("name") if before else name)
             detail, status = self._normalize_backend_response(response)
-            after = self._find_window_snapshot(handle=before.get("handle"), name=name, refresh=True)
+            after = self._find_window_snapshot(handle=handle or before.get("handle"), pid=pid or before.get("pid"), name=name, refresh=True)
             if after is None:
-                after = self._snapshot_window(name, refresh=True)
+                after = self._snapshot_window(name, refresh=True, handle=handle or before.get("handle"), pid=pid or before.get("pid"), prefer_active=True)
             verified = bool(status in (None, 0) and after and str(after.get("status", "")).lower() not in {"minimized", "maximized"})
             payload = {
                 **self._window_payload(target_window=before.get("name") if before else name, before=before, after=after),

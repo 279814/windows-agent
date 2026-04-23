@@ -2,11 +2,22 @@ from desktop_agent_dev.executor import Executor, InputResult
 
 
 class FakeWindowState:
-    def __init__(self, name: str = "main", handle: int | None = 1, status: str = "normal") -> None:
+    def __init__(
+        self,
+        name: str = "main",
+        handle: int | None = 1,
+        status: str = "normal",
+        pid: int | None = None,
+        bounds: list[int] | None = None,
+        is_visible: bool | None = True,
+    ) -> None:
         self.name = name
         self.handle = handle
         self.status = status
+        self.pid = pid if pid is not None else handle
         self.window_title = name
+        self.bounds = bounds or [0, 0, 800, 600]
+        self.is_visible = is_visible
         self.value = ""
 
 
@@ -342,6 +353,92 @@ class FakeDuplicateTitleMinimizeBackend(FakeExecBackend):
         return (f"{name} minimized.", 0)
 
 
+class FakeNormalizedSwitchBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self._state = FakeDesktopState(
+            FakeWindowState(name="Codex", handle=11, status="maximized", pid=11),
+            windows=[
+                FakeWindowState(name="Codex", handle=11, status="maximized", pid=11),
+                FakeWindowState(name="test.txt - Notepad", handle=22, status="normal", pid=220),
+            ],
+        )
+
+    def switch_app(self, name: str) -> tuple[str, int]:
+        self.calls.append(("switch_app", (name,), {}))
+        target = FakeWindowState(name="*test.txt - Notepad", handle=22, status="normal", pid=220)
+        self._state = FakeDesktopState(
+            target,
+            windows=[target, FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)],
+        )
+        return ("Switched to *Test.Txt - Notepad window.", 0)
+
+
+class FakeRestoredFromMinimizedBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self._state = FakeDesktopState(
+            FakeWindowState(name="Codex", handle=11, status="maximized", pid=11),
+            windows=[
+                FakeWindowState(name="Codex", handle=11, status="maximized", pid=11),
+                FakeWindowState(name="test.txt - Notepad", handle=22, status="minimized", pid=220, is_visible=False),
+            ],
+        )
+
+    def switch_app(self, name: str) -> tuple[str, int]:
+        self.calls.append(("switch_app", (name,), {}))
+        target = FakeWindowState(name="test.txt - Notepad", handle=22, status="normal", pid=220, is_visible=True)
+        self._state = FakeDesktopState(
+            target,
+            windows=[target, FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)],
+        )
+        return ("Restored Test.Txt - Notepad from minimized and switched to it.", 0)
+
+
+class FakeGeometryMaximizeBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        target = FakeWindowState(name="计算器", handle=303, status="normal", pid=3303, bounds=[100, 100, 500, 600])
+        self._state = FakeDesktopState(target, windows=[target])
+
+    def maximize_app(self, name: str | None = None) -> tuple[str, int]:
+        self.calls.append(("maximize_app", (name,), {}))
+        target = FakeWindowState(name="计算器", handle=303, status="normal", pid=3303, bounds=[0, 0, 1200, 900])
+        self._state = FakeDesktopState(target, windows=[target])
+        return ("Maximized 计算器 window.", 0)
+
+
+class FakeVisibleFlagMinimizeBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        target = FakeWindowState(name="计算器", handle=404, status="normal", pid=4404, is_visible=True)
+        other = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        self._state = FakeDesktopState(target, windows=[target, other])
+
+    def minimize_app(self, name: str | None = None) -> tuple[str, int]:
+        self.calls.append(("minimize_app", (name,), {}))
+        target = FakeWindowState(name="计算器", handle=404, status="normal", pid=4404, is_visible=False)
+        other = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        self._state = FakeDesktopState(other, windows=[other, target])
+        return ("计算器 minimized.", 0)
+
+
+class FakeDuplicateTitleCloseBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        primary = FakeWindowState(name="计算器", handle=101, status="normal", pid=1001)
+        secondary = FakeWindowState(name="计算器", handle=202, status="normal", pid=2002)
+        active = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        self._state = FakeDesktopState(active, windows=[active, primary, secondary])
+
+    def close_app(self, name: str) -> tuple[str, int]:
+        self.calls.append(("close_app", (name,), {}))
+        active = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        remaining = FakeWindowState(name="计算器", handle=202, status="normal", pid=2002)
+        self._state = FakeDesktopState(active, windows=[active, remaining])
+        return ("Failed to post WM_CLOSE to 计算器.", 1)
+
+
 def test_executor_close_window_marks_backend_failure_as_not_ok() -> None:
     backend = FakeFailBackend()
     executor = Executor(backend=backend)
@@ -501,6 +598,31 @@ def test_executor_switch_window_marks_backend_not_found_as_failure() -> None:
     assert result.payload["verified"] is False
 
 
+def test_executor_switch_window_normalizes_unsaved_marker_in_title() -> None:
+    backend = FakeNormalizedSwitchBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.switch_window("test.txt - Notepad")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["verified"] is True
+    assert result.payload["current_window"] == "*test.txt - Notepad"
+    assert result.payload["matched_by"] == "handle"
+
+
+def test_executor_focus_window_reports_restored_from_target_state() -> None:
+    backend = FakeRestoredFromMinimizedBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.focus_window("test.txt - Notepad")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["restored_from_minimized"] is True
+    assert result.payload["strategy"] == "switch_window"
+
+
 def test_executor_minimize_accepts_hidden_target_handle_as_success() -> None:
     backend = FakeDuplicateTitleMinimizeBackend()
     executor = Executor(backend=backend)
@@ -513,6 +635,55 @@ def test_executor_minimize_accepts_hidden_target_handle_as_success() -> None:
     assert result.payload["verification_mode"] == "handle_hidden_after_minimize"
     assert result.payload["target_handle_present_after"] is False
     assert result.payload["active_window_after"]["handle"] == 202
+
+
+def test_executor_minimize_can_target_specific_handle_for_duplicate_titles() -> None:
+    backend = FakeDuplicateTitleMinimizeBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.minimize_window("计算器", handle=101)
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["before_handle"] == 101
+    assert result.payload["verification_mode"] == "handle_hidden_after_minimize"
+
+
+def test_executor_minimize_accepts_invisible_target_as_success() -> None:
+    backend = FakeVisibleFlagMinimizeBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.minimize_window("计算器")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["verification_mode"] == "visibility_hidden_after_minimize"
+    assert result.payload["active_window_after"]["name"] == "Codex"
+
+
+def test_executor_maximize_accepts_bounds_expansion_when_status_lags() -> None:
+    backend = FakeGeometryMaximizeBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.maximize_window("计算器")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["verified"] is True
+    assert result.payload["verification_mode"] in {"bounds_expanded", "backend_ack_active_target"}
+
+
+def test_executor_close_window_accepts_matching_count_drop_for_duplicate_titles() -> None:
+    backend = FakeDuplicateTitleCloseBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.close_window("计算器")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["post_close_verified"] is True
+    assert result.payload["verification_mode"] == "name_count_decreased"
+    assert result.payload["outcome"] == "success_wm_close_degraded"
 
 
 def test_executor_launch_app_prefers_desktop_shortcut_for_third_party_app(tmp_path, monkeypatch) -> None:
