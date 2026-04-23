@@ -37,6 +37,7 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
                     "Desktop observation through normalized snapshots of windows, focused controls, UIA tree nodes, and optional screenshots.",
                     "Desktop input primitives such as click, move, drag, scroll, typing, shortcuts, multi-edit, and multi-select.",
                     "Window lifecycle control with name/handle/pid targeting plus verification-driven launch, switch, focus, resize, minimize, maximize, restore, and close behavior.",
+                    "Motion planning and overlay inspection tools for previewing cursor trajectories and reading virtual overlay state.",
                     "Task planning/state helpers for observe -> act -> verify workflows.",
                 ],
             },
@@ -47,6 +48,8 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
                     "Use snapshot tools to observe state before acting.",
                     "Prefer handle-aware verification fields such as verified, matched_by, before_handle, after_handle, verification_mode, and backend_response_code when auditing window-tool results.",
                     "Input tools vary in payload richness: click/type/shortcut expose stronger verification fields, while move/drag/scroll/multi-* actions may need desktop_snapshot pairing for post-action confirmation.",
+                    "motion_preview is read-only planning; inspect path, phase, overlay_state, and metadata before dispatching real cursor motion.",
+                    "overlay_state is read-only and reports the latest virtual overlay snapshot without mutating desktop state.",
                     "Window tools accept name, handle, or pid selectors. Targeting precedence is handle > pid > name, so prefer handle in duplicate-title scenarios.",
                     "Maximize/minimize/close verification may rely on multiple signals, including status, handle visibility, active-window changes, geometry changes, or matching-window count deltas.",
                     "Treat ocr_extract/ui_match/vision_capture/vision_locate as TODO placeholders until implemented.",
@@ -171,10 +174,12 @@ def build_security(registry: ToolRegistry) -> dict[str, Any]:
                 "content": [
                     "High-risk actions are guarded by the safety gate.",
                     "The server emits read-only documentation resources plus normalized tool metadata for client-side catalogs.",
+                    "Motion planning and overlay state resources are additive discovery helpers and do not modify legacy tool execution flows.",
                     "Window-control success is verification-driven: backend success alone is not treated as sufficient when foreground, handle, visibility, or geometry checks disagree.",
                     "Input actions with lighter payloads are still safe to expose, but clients should pair them with fresh observations when they need stronger auditability.",
                     "Placeholder vision tools are intentionally exposed as TODO/not-implemented so clients can branch to fallback strategies.",
                     "New motion and overlay tools are additive helpers and should not be used to rewrite legacy tool execution flows.",
+                    "Resource discovery should include motion_preview and overlay_state so clients can enumerate the new tools without inspecting internal modules.",
                 ],
             },
             {
@@ -205,6 +210,7 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
                 "Use catalog for grouped tool descriptions, examples, and implementation status.",
                 "Use tool-index for compact per-tool lookup without the full handbook body.",
                 "Use capabilities and security when a client needs feature gating, risk posture, or fallback policy.",
+                "Use the discovery hints inside tool-index when a client wants to enumerate motion_preview or overlay_state without scanning every tool entry.",
             ],
             "verification_semantics": {
                 "window_tools": [
