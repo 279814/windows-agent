@@ -881,6 +881,18 @@ class Executor:
                     return match.group(1).strip().lower(), match.group(2).strip()
                 return None, None
 
+            def _window_identity(snapshot: dict[str, Any]) -> tuple[Any, ...]:
+                handle = snapshot.get("handle")
+                if handle is not None:
+                    return ("handle", handle)
+                window_pid = snapshot.get("pid")
+                normalized_name = self._normalize_window_name(snapshot.get("name") or snapshot.get("window_title"))
+                if window_pid is not None:
+                    return ("pid", window_pid, normalized_name)
+                bounds = snapshot.get("bounds")
+                bounds_key = tuple(bounds) if isinstance(bounds, (list, tuple)) else None
+                return ("name", normalized_name, bounds_key)
+
             before_state = None
             after_state = None
             try:
@@ -931,31 +943,51 @@ class Executor:
             except Exception:
                 after_state = None
 
-            before_matching_windows = [
-                self._window_to_snapshot(window)
-                for window in (before_state or [])
-                if _matches_expected(getattr(window, "name", None) or getattr(window, "window_title", None))
-            ]
-            before_matching_windows = [window for window in before_matching_windows if window is not None]
-            after_matching_windows = [
-                self._window_to_snapshot(window)
-                for window in (after_state or [])
-                if _matches_expected(getattr(window, "name", None) or getattr(window, "window_title", None))
-            ]
-            after_matching_windows = [window for window in after_matching_windows if window is not None]
-            before_handles = {window.get("handle") for window in before_matching_windows if window.get("handle") is not None}
-            new_matching_windows = [window for window in after_matching_windows if window.get("handle") not in before_handles]
-            new_instance_detected = bool(new_matching_windows or len(after_matching_windows) > len(before_matching_windows))
+            before_windows = [self._window_to_snapshot(window) for window in (before_state or [])]
+            before_windows = [window for window in before_windows if window is not None]
+            after_windows = [self._window_to_snapshot(window) for window in (after_state or [])]
+            after_windows = [window for window in after_windows if window is not None]
 
+            before_matching_windows = [
+                window
+                for window in before_windows
+                if _matches_expected(window.get("name") or window.get("window_title"))
+            ]
+            after_matching_windows = [
+                window
+                for window in after_windows
+                if _matches_expected(window.get("name") or window.get("window_title"))
+            ]
+            before_window_identities = {_window_identity(window) for window in before_windows}
+            new_visible_windows = [
+                window for window in after_windows if _window_identity(window) not in before_window_identities
+            ]
+            new_matching_windows = [
+                window
+                for window in new_visible_windows
+                if _matches_expected(window.get("name") or window.get("window_title"))
+                or (pid is not None and pid > 0 and window.get("pid") == pid)
+            ]
+
+            backend_verification_matches = _matches_expected(verification_hint)
             matched_window_name = None
             if new_matching_windows:
                 matched_window_name = new_matching_windows[0].get("name") or new_matching_windows[0].get("window_title")
             elif after_matching_windows:
                 matched_window_name = after_matching_windows[0].get("name") or after_matching_windows[0].get("window_title")
 
-            backend_verification_matches = _matches_expected(verification_hint)
             resolved_detected_name = matched_window_name or (verification_hint if backend_verification_matches else detected_name)
             target_matches = _matches_expected(resolved_detected_name) or backend_verification_matches
+            before_window_count = len(before_state) if isinstance(before_state, list) else None
+            after_window_count = len(after_state) if isinstance(after_state, list) else None
+            new_instance_inferred = bool(
+                not new_matching_windows
+                and target_matches
+                and isinstance(before_window_count, int)
+                and isinstance(after_window_count, int)
+                and after_window_count > before_window_count
+            )
+            new_instance_detected = bool(new_matching_windows or new_instance_inferred)
             mismatch_signals = [
                 candidate
                 for candidate in (resolved_detected_name, None if backend_verification_matches else verification_hint)
@@ -987,6 +1019,20 @@ class Executor:
                 if verification_ok
                 else (f"launch pending verification:{name}" if partial_ok else (f"launch failed:{name}" if not launched else f"target mismatch:{name}->{resolved_detected_name}"))
             )
+            if target_matches and not any(attempt.get("target_matches") for attempt in verification_attempts):
+                verification_attempts.append(
+                    {
+                        "attempt": len(verification_attempts) + 1,
+                        "window_count_increased": bool(
+                            before_window_count is not None
+                            and after_window_count is not None
+                            and after_window_count > before_window_count
+                        ),
+                        "detected_window_name": resolved_detected_name,
+                        "verification_source": "window_list" if matched_window_name else (verification_source or "derived"),
+                        "target_matches": True,
+                    }
+                )
             payload = {
                 "name": name,
                 "requested_target": requested_target,
@@ -997,8 +1043,8 @@ class Executor:
                 "backend_response": response,
                 "status": status,
                 "pid": pid,
-                "before_window_count": len(before_state) if isinstance(before_state, list) else None,
-                "after_window_count": len(after_state) if isinstance(after_state, list) else None,
+                "before_window_count": before_window_count,
+                "after_window_count": after_window_count,
                 "matching_instance_count_before": len(before_matching_windows),
                 "matching_instance_count_after": len(after_matching_windows),
                 "new_instance_detected": new_instance_detected,
@@ -1298,9 +1344,8 @@ class Executor:
             )
             if current is None:
                 current = self._snapshot_window(refresh=True)
-            verified = bool(
-                status in (None, 0)
-                and current
+            observed_match = bool(
+                current
                 and (
                     self._window_name_matches(current, name)
                     or self._window_same_target(current, target_before)
@@ -1308,6 +1353,27 @@ class Executor:
                     or (pid is not None and current.get("pid") == pid)
                 )
             )
+            previous_already_target = bool(
+                previous
+                and (
+                    self._window_name_matches(previous, name)
+                    or self._window_same_target(previous, target_before)
+                    or (handle is not None and previous.get("handle") == handle)
+                    or (pid is not None and previous.get("pid") == pid)
+                )
+            )
+            observed_recovery = bool(observed_match and not previous_already_target)
+            verified = bool((status in (None, 0) and observed_match) or observed_recovery)
+            result_detail = detail
+            backend_response = response
+            backend_response_detail = detail
+            backend_response_code = status
+            if verified and status not in (None, 0):
+                resolved_name = current.get("name") if current else None
+                result_detail = f"Switched to {resolved_name or target_label} window."
+                backend_response = (result_detail, 0)
+                backend_response_detail = result_detail
+                backend_response_code = 0
             restored_from_minimized = self._window_is_minimized(target_before)
             payload = {
                 **self._window_payload(target_window=target_label, before=previous, after=current),
@@ -1318,12 +1384,16 @@ class Executor:
                 "current_handle": current.get("handle") if current else None,
                 "matched_by": current_matched_by,
                 "restored_from_minimized": restored_from_minimized,
-                "backend_response": response,
-                "backend_response_detail": detail,
-                "backend_response_code": status,
+                "backend_response": backend_response,
+                "backend_response_detail": backend_response_detail,
+                "backend_response_code": backend_response_code,
                 "verified": verified,
             }
-            return self._result("window_switch", detail, ok=verified, payload=payload, tool="window_switch")
+            if verified and status not in (None, 0):
+                payload["switch_backend_response"] = response
+                payload["switch_backend_response_detail"] = detail
+                payload["switch_backend_response_code"] = status
+            return self._result("window_switch", result_detail, ok=verified, payload=payload, tool="window_switch")
 
         raise ExecutorError("Backend does not expose switch_app().")
 
@@ -1406,6 +1476,14 @@ class Executor:
                 fallback.action = "window_focus"
                 fallback.tool = "window_focus"
                 fallback.payload["strategy"] = "switch_window"
+                if fallback.ok:
+                    fallback.payload["focus_backend_response"] = response
+                    fallback.payload["focus_backend_response_detail"] = detail
+                    fallback.payload["focus_backend_response_code"] = status
+                else:
+                    fallback.payload["backend_response"] = response
+                    fallback.payload["backend_response_detail"] = detail
+                    fallback.payload["backend_response_code"] = status
                 return fallback
             return result
 

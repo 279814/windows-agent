@@ -388,6 +388,38 @@ class FakeBackgroundLaunchBackend(FakeExecBackend):
         return (f"Launched {name}. [verification=name:计算器]", 0, 4243)
 
 
+class FakeNewWindowCountLaunchBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        existing = FakeWindowState(name="计算器", handle=201, status="normal", pid=4201)
+        codex = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        self._state = FakeDesktopState(existing, windows=[existing, codex])
+
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        self.calls.append(("launch_app", (name,), {}))
+        existing = FakeWindowState(name="计算器", handle=201, status="normal", pid=4201)
+        codex = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        new_window = FakeWindowState(name="ApplicationFrameHost", handle=202, status="normal", pid=4202)
+        self._state = FakeDesktopState(existing, windows=[existing, codex, new_window])
+        return (f"Launched {name}. [verification=name:计算器]", 0, 4202)
+
+
+class FakeInferredNewInstanceLaunchBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        active = FakeWindowState(name="*test.txt - Notepad", handle=12, status="normal", pid=1200)
+        existing = FakeWindowState(name="计算器", handle=201, status="normal", pid=4201)
+        self._state = FakeDesktopState(active, windows=[active, existing])
+
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        self.calls.append(("launch_app", (name,), {}))
+        active = FakeWindowState(name="*test.txt - Notepad", handle=12, status="normal", pid=1200)
+        existing = FakeWindowState(name="计算器", handle=201, status="normal", pid=4201)
+        unrelated = FakeWindowState(name="RemoteApp", handle=303, status="normal", pid=3030)
+        self._state = FakeDesktopState(active, windows=[active, existing, unrelated])
+        return (f"Launched {name}. [verification=name:计算器]", 0, 4968)
+
+
 class FakeWindowLifecycleBackend(FakeExecBackend):
     def __init__(self, maximize_status: str = "normal", minimize_status: str = "normal", restore_status: str = "maximized") -> None:
         super().__init__()
@@ -525,6 +557,25 @@ class FakeHiddenCachedWindowBackend(FakeExecBackend):
         return (f"Application {name} not found.", 1)
 
 
+class FakeObservedSwitchSuccessBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        active = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        target = FakeWindowState(name="计算器", handle=808, status="normal", pid=8808, is_visible=True)
+        self._state = FakeDesktopState(active, windows=[active, target])
+
+    def focus_app(self, name: str) -> tuple[str, int]:
+        self.calls.append(("focus_app", (name,), {}))
+        return (f"Application {name} not found.", 1)
+
+    def switch_app(self, name: str) -> tuple[str, int]:
+        self.calls.append(("switch_app", (name,), {}))
+        target = FakeWindowState(name="计算器", handle=808, status="normal", pid=8808, is_visible=True)
+        codex = FakeWindowState(name="Codex", handle=11, status="maximized", pid=11)
+        self._state = FakeDesktopState(target, windows=[target, codex])
+        return (f"Application {name} not found.", 1)
+
+
 class FakeDuplicateTitleCloseBackend(FakeExecBackend):
     def __init__(self) -> None:
         super().__init__()
@@ -637,6 +688,42 @@ def test_executor_launch_app_prefers_matched_window_name_over_unrelated_active_w
     assert result.payload["matched_window_name"] == "计算器"
     assert result.payload["target_matches"] is True
     assert result.payload["verification_attempts"][0]["detected_window_name"] == "*test.txt - Notepad"
+    assert result.payload["verification_attempts"][-1]["detected_window_name"] == "计算器"
+    assert result.payload["verification_attempts"][-1]["target_matches"] is True
+
+
+def test_executor_launch_app_marks_new_instance_from_raw_window_diff_when_target_is_verified() -> None:
+    backend = FakeNewWindowCountLaunchBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("calc")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["before_window_count"] == 2
+    assert result.payload["after_window_count"] == 3
+    assert result.payload["matching_instance_count_before"] == 1
+    assert result.payload["matching_instance_count_after"] == 1
+    assert result.payload["new_instance_detected"] is True
+    assert result.payload["new_instance_handles"] == [202]
+    assert result.payload["new_instance_pids"] == [4202]
+
+
+def test_executor_launch_app_does_not_bind_unrelated_new_window_to_target_instance() -> None:
+    backend = FakeInferredNewInstanceLaunchBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("calc")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["before_window_count"] == 2
+    assert result.payload["after_window_count"] == 3
+    assert result.payload["matching_instance_count_before"] == 1
+    assert result.payload["matching_instance_count_after"] == 1
+    assert result.payload["new_instance_detected"] is True
+    assert result.payload["new_instance_handles"] == []
+    assert result.payload["new_instance_pids"] == []
 
 
 def test_executor_launch_app_maps_notepad_and_mspaint_aliases() -> None:
@@ -730,6 +817,23 @@ def test_executor_switch_window_marks_backend_not_found_as_failure() -> None:
     assert result.payload["verified"] is False
 
 
+def test_executor_switch_window_exposes_original_backend_failure_when_observation_recovers() -> None:
+    backend = FakeObservedSwitchSuccessBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.switch_window("计算器")
+
+    assert result.ok is True
+    assert result.detail == "Switched to 计算器 window."
+    assert result.payload is not None
+    assert result.payload["backend_response"] == ("Switched to 计算器 window.", 0)
+    assert result.payload["backend_response_detail"] == "Switched to 计算器 window."
+    assert result.payload["backend_response_code"] == 0
+    assert result.payload["switch_backend_response"] == ("Application 计算器 not found.", 1)
+    assert result.payload["switch_backend_response_detail"] == "Application 计算器 not found."
+    assert result.payload["switch_backend_response_code"] == 1
+
+
 def test_executor_switch_window_normalizes_unsaved_marker_in_title() -> None:
     backend = FakeNormalizedSwitchBackend()
     executor = Executor(backend=backend)
@@ -788,6 +892,24 @@ def test_executor_focus_window_uses_cached_hidden_handle_with_native_fallback() 
     assert result.payload["strategy"] == "native_handle"
     assert result.payload["current_handle"] == 808
     assert result.payload["active_window_after"]["handle"] == 808
+
+
+def test_executor_focus_window_accepts_switch_fallback_when_backend_reports_not_found() -> None:
+    backend = FakeObservedSwitchSuccessBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.focus_window("计算器")
+
+    assert result.ok is True
+    assert result.detail == "Switched to 计算器 window."
+    assert result.payload is not None
+    assert result.payload["strategy"] == "switch_window"
+    assert result.payload["verified"] is True
+    assert result.payload["focus_backend_response_code"] == 1
+    assert result.payload["backend_response_code"] == 0
+    assert result.payload["backend_response"] == ("Switched to 计算器 window.", 0)
+    assert result.payload["switch_backend_response_code"] == 1
+    assert result.payload["current_handle"] == 808
 
 
 def test_executor_minimize_accepts_hidden_target_handle_as_success() -> None:
