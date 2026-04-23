@@ -118,9 +118,11 @@ class Executor:
         if before is not None:
             attempt_notes.append({"step": "ensure_window_ready", "window": before.get("name"), "handle": before.get("handle")})
         self._overlay_renderer.record_timeline("input_begin", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "begin", "operation": operation, "recover_name": recover_name, "recover_handle": recover_handle, "recover_pid": recover_pid})
+        failure_info: dict[str, Any] | None = None
         try:
             result = runner()
         except Exception as exc:
+            failure_info = {"error": str(exc), "recovery_attempts": attempt_notes, "operation": operation}
             attempt_notes.append({"step": "runner_error", "error": str(exc)})
             self._overlay_renderer.record_timeline("input_error", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "error", "operation": operation, "error": str(exc)})
             before_retry = self._ensure_window_ready(recover_name, recover_handle, recover_pid)
@@ -133,6 +135,8 @@ class Executor:
         result.payload["recovery_attempts"] = attempt_notes
         result.payload["overlay_state"] = self._overlay_snapshot_payload()
         result.payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
+        if failure_info is not None:
+            result.payload["failure_replay"] = self._build_failure_replay(operation=operation, failure_info=failure_info, payload=result.payload)
         return result
 
     def _task_motion_event(self, *, kind: str, phase: MotionPhase, action: MotionAction | None = None, error_message: str | None = None) -> dict[str, Any]:
@@ -147,6 +151,45 @@ class Executor:
             payload["duration_ms"] = action.duration_ms
             payload["steps"] = action.metadata.get("steps")
         return payload
+
+    def _build_failure_replay(self, *, operation: str, failure_info: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "operation": operation,
+            "error": failure_info.get("error"),
+            "recovery_attempts": failure_info.get("recovery_attempts", []),
+            "overlay_state": payload.get("overlay_state"),
+            "execution_timeline": payload.get("execution_timeline", []),
+            "motion": payload.get("motion"),
+            "target_verification": payload.get("target_verification"),
+        }
+
+    def _drive_motion(self, *, kind: str, start: tuple[int, int], end: tuple[int, int], steps: int, hover_ms: int, jitter_px: int, accel: float, decel: float) -> dict[str, Any]:
+        action = self._motion_scheduler.plan(kind=kind, start=start, end=end, metadata={"kind": kind}, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+        result = self._motion_scheduler.execute(action, steps=steps)
+        self._overlay_renderer.show()
+        self._overlay_renderer.attach_motion(result.phase.value, self._task_motion_event(kind=kind, phase=result.phase, action=action))
+        return {
+            "motion": {
+                "ok": result.ok,
+                "phase": result.phase.value,
+                "action": {
+                    "kind": result.action.kind,
+                    "start": {"x": result.action.start.x, "y": result.action.start.y},
+                    "end": {"x": result.action.end.x, "y": result.action.end.y},
+                    "duration_ms": result.action.duration_ms,
+                    "easing": result.action.easing,
+                    "hover_ms": result.action.hover_ms,
+                    "jitter_px": result.action.jitter_px,
+                    "accel": result.action.accel,
+                    "decel": result.action.decel,
+                    "metadata": result.action.metadata,
+                },
+                "path": [{"x": point.x, "y": point.y, "t": point.t} for point in result.path],
+                "detail": result.detail,
+                "metadata": result.metadata,
+            },
+            "overlay_state": self._overlay_snapshot_payload(),
+        }
 
     def _update_task_state(self, task_id: str | None, *, action: dict[str, Any] | None = None, verified: bool = False, error_message: str | None = None) -> None:
         if not task_id:
@@ -856,9 +899,9 @@ class Executor:
         def runner() -> InputResult:
             before_context = self._input_context_snapshot()
             element = self._hit_test_element(x, y)
-            hover_motion = self._virtual_mouse_motion("hover", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
-            settle_motion = self._virtual_mouse_motion("move", (x, y), (x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1)
-            virtual_mouse = self._virtual_mouse_motion("click", (x, y), (x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0)
+            hover_motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(x, y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
+            settle_motion = self._drive_motion(kind="move", start=(x, y), end=(x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1)
+            virtual_mouse = self._drive_motion(kind="click", start=(x, y), end=(x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0)
             payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element, "pre_click_hover": hover_motion, "pre_click_settle": settle_motion, **virtual_mouse}
             self._overlay_renderer.show()
             self._overlay_renderer.update_cursor(x, y)
@@ -888,7 +931,7 @@ class Executor:
 
     def move(self, x: int, y: int, steps: int = 8, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0) -> InputResult:
         def runner() -> InputResult:
-            motion = self._virtual_mouse_motion("move", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+            motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(x, y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
             payload = {"x": x, "y": y, "element": self._hit_test_element(x, y), **motion}
             self._overlay_renderer.show()
             self._overlay_renderer.update_cursor(x, y)
@@ -913,8 +956,8 @@ class Executor:
     def drag(self, start: tuple[int, int], end: tuple[int, int], steps: int = 16, hover_ms: int = 120, jitter_px: int = 1, accel: float = 1.0, decel: float = 1.1) -> InputResult:
         def runner() -> InputResult:
             before_context = self._input_context_snapshot()
-            hover_motion = self._virtual_mouse_motion("hover", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), start, steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
-            virtual_mouse = self._virtual_mouse_motion("drag", start, end, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+            hover_motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=start, steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
+            virtual_mouse = self._drive_motion(kind="drag", start=start, end=end, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
             payload = {
                 "start": {"x": start[0], "y": start[1], "element": self._hit_test_element(start[0], start[1])},
                 "end": {"x": end[0], "y": end[1], "element": self._hit_test_element(end[0], end[1])},

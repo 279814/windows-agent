@@ -141,10 +141,12 @@ class VirtualCursorState:
 class MotionScheduler:
     """Motion scheduler with virtual cursor planning and execution state tracking."""
 
-    def __init__(self, *, default_duration_ms: int = 180, cursor_state: VirtualCursorState | None = None, seed: int = 7) -> None:
+    def __init__(self, *, default_duration_ms: int = 180, cursor_state: VirtualCursorState | None = None, seed: int = 7, debug_show_points: bool = False, debug_show_target: bool = False) -> None:
         self.default_duration_ms = default_duration_ms
         self.cursor_state = cursor_state or VirtualCursorState()
         self._pathgen = PathGenerator(seed=seed)
+        self.debug_show_points = debug_show_points
+        self.debug_show_target = debug_show_target
 
     def build_path(self, action: MotionAction, steps: int = 16) -> list[MotionPoint]:
         return self._pathgen.build(action, steps=steps)
@@ -166,8 +168,13 @@ class MotionScheduler:
 
     def plan_result(self, action: MotionAction, steps: int = 16) -> MotionResult:
         path = self.build_path(action, steps=steps)
-        event = MotionEvent(action_id=action.action_id or "planned", kind=action.kind, phase=MotionPhase.PLANNED, timestamp_ms=0, detail="motion planned", metadata={"steps": len(path)})
-        return MotionResult(ok=True, phase=MotionPhase.PLANNED, action=action, path=path, detail="motion planned", metadata={"steps": len(path)}, event=event)
+        event = MotionEvent(action_id=action.action_id or "planned", kind=action.kind, phase=MotionPhase.PLANNED, timestamp_ms=0, detail="motion planned", metadata={"steps": len(path), "debug_show_points": self.debug_show_points, "debug_show_target": self.debug_show_target})
+        metadata = {"steps": len(path), "debug_show_points": self.debug_show_points, "debug_show_target": self.debug_show_target}
+        if self.debug_show_points:
+            metadata["points"] = [{"x": point.x, "y": point.y, "t": point.t} for point in path]
+        if self.debug_show_target:
+            metadata["target"] = {"x": action.end.x, "y": action.end.y}
+        return MotionResult(ok=True, phase=MotionPhase.PLANNED, action=action, path=path, detail="motion planned", metadata=metadata, event=event)
 
     def execute(self, action: MotionAction, steps: int = 16) -> MotionResult:
         self.cursor_state.phase = MotionPhase.ANIMATING
@@ -198,8 +205,13 @@ class MotionScheduler:
             "last_target": {"x": action.end.x, "y": action.end.y},
             "last_status": MotionPhase.VERIFIED.value,
         }
-        event = MotionEvent(action_id=action.action_id or "executed", kind=action.kind, phase=MotionPhase.VERIFIED, timestamp_ms=0, detail="motion executed", metadata={"steps": len(path), "verified": True})
-        return MotionResult(ok=True, phase=MotionPhase.VERIFIED, action=action, path=path, detail="motion executed", metadata={"steps": len(path), "verified": True}, event=event)
+        metadata = {"steps": len(path), "verified": True, "debug_show_points": self.debug_show_points, "debug_show_target": self.debug_show_target}
+        if self.debug_show_points:
+            metadata["points"] = [{"x": point.x, "y": point.y, "t": point.t} for point in path]
+        if self.debug_show_target:
+            metadata["target"] = {"x": action.end.x, "y": action.end.y}
+        event = MotionEvent(action_id=action.action_id or "executed", kind=action.kind, phase=MotionPhase.VERIFIED, timestamp_ms=0, detail="motion executed", metadata=metadata)
+        return MotionResult(ok=True, phase=MotionPhase.VERIFIED, action=action, path=path, detail="motion executed", metadata=metadata, event=event)
 
     def run(self, action: MotionAction, steps: int = 16) -> MotionResult:
         return self.execute(action, steps=steps)
