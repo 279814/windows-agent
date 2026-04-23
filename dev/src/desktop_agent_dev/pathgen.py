@@ -80,6 +80,22 @@ class PathGenerator:
             points.append(self.bezier_point(start, control, end, eased))
         return points
 
+    def sample_spline(self, start, end, steps: int, *, curvature: float, easing: str, accel: float, decel: float):
+        from .motion import MotionPoint
+        steps = max(4, steps)
+        start_ctrl = MotionPoint(x=round(start.x + (end.x - start.x) * 0.20), y=round(start.y + (end.y - start.y) * 0.20), t=0.2)
+        mid_ctrl = self.midpoint(start, end, curvature=curvature)
+        end_ctrl = MotionPoint(x=round(start.x + (end.x - start.x) * 0.80), y=round(start.y + (end.y - start.y) * 0.80), t=0.8)
+        # Build a denser, smoothed path by stitching three cubic-inspired samples together.
+        first = self.sample_bezier(start, start_ctrl, max(2, steps // 3 + 1), curvature=curvature * 0.6, easing=easing, accel=accel, decel=decel)
+        second = self.sample_bezier(start_ctrl, mid_ctrl, max(2, steps // 3 + 1), curvature=curvature, easing=easing, accel=accel, decel=decel)
+        third = self.sample_bezier(mid_ctrl, end_ctrl, max(2, steps // 3 + 1), curvature=curvature * 0.8, easing=easing, accel=accel, decel=decel)
+        fourth = self.sample_bezier(end_ctrl, end, max(2, steps // 3 + 1), curvature=curvature * 0.5, easing=easing, accel=accel, decel=decel)
+        points = first[:-1] + second[:-1] + third[:-1] + fourth
+        if points and (points[-1].x, points[-1].y) != (end.x, end.y):
+            points.append(MotionPoint(x=end.x, y=end.y, t=1.0))
+        return points
+
     def hover_pause(self, start, hover_ms: int, steps: int = 4):
         from .motion import MotionPoint
         if hover_ms <= 0:
@@ -108,16 +124,22 @@ class PathGenerator:
         if action.kind == "drag":
             first = self.sample_bezier(action.start, action.end, max(steps, 6), curvature=0.14, easing=action.easing, accel=action.accel, decel=action.decel)
             path.extend(self.stabilize_drag(first, strength=0.18))
+            if path:
+                path[-1] = MotionPoint(x=action.end.x, y=action.end.y, t=1.0)
         elif action.kind == "move":
             curvature = 0.22 if distance >= 120 else 0.12
-            path.extend(self.sample_bezier(action.start, action.end, steps, curvature=curvature, easing="ease_in_out", accel=action.accel, decel=action.decel))
+            if distance >= 220:
+                path.extend(self.sample_spline(action.start, action.end, steps, curvature=curvature, easing="ease_in_out", accel=action.accel, decel=action.decel))
+            else:
+                path.extend(self.sample_bezier(action.start, action.end, steps, curvature=curvature, easing="ease_in_out", accel=action.accel, decel=action.decel))
         elif action.kind == "click":
             prefix = self.sample_line(action.start, action.end, max(2, steps // 3), easing="ease_out", accel=action.accel, decel=action.decel)
             path.extend(prefix)
-            path.append(MotionPoint(x=action.end.x, y=action.end.y, t=1.0))
+            if path and (path[-1].x, path[-1].y) != (action.end.x, action.end.y):
+                path.append(MotionPoint(x=action.end.x, y=action.end.y, t=1.0))
         else:
             if distance >= 180:
-                path.extend(self.sample_bezier(action.start, action.end, steps, curvature=0.16, easing=action.easing, accel=action.accel, decel=action.decel))
+                path.extend(self.sample_spline(action.start, action.end, steps, curvature=0.16, easing=action.easing, accel=action.accel, decel=action.decel))
             else:
                 path.extend(self.sample_line(action.start, action.end, steps, easing=action.easing, accel=action.accel, decel=action.decel))
         if not path:

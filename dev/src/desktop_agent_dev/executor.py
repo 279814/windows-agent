@@ -141,6 +141,20 @@ class Executor:
                 "overlay_state": {"visible": overlay_snapshot.visible, "cursor_x": overlay_snapshot.cursor_x, "cursor_y": overlay_snapshot.cursor_y, "trail": [list(point) for point in overlay_snapshot.trail], "metadata": overlay_snapshot.metadata, "last_action_kind": overlay_snapshot.last_action_kind, "last_action_status": overlay_snapshot.last_action_status, "last_target": overlay_snapshot.last_target, "last_error": overlay_snapshot.last_error, "last_verified_at": overlay_snapshot.last_verified_at},
                 "task_state": self._task_store.get(task_id).status if task_id else None,
             }
+        except Exception as exc:
+            self._overlay_renderer.attach_motion(MotionPhase.FAILED.value, {"kind": kind, "last_error": str(exc), "last_target": {"x": end[0], "y": end[1]}})
+            self._update_task_state(task_id, action=self._task_motion_event(kind=kind, phase=MotionPhase.FAILED, action=action, error_message=str(exc)), error_message=str(exc))
+            overlay_snapshot = self._overlay_renderer.snapshot()
+            return {
+                "ok": False,
+                "phase": MotionPhase.FAILED.value,
+                "action": {"kind": kind, "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}, "duration_ms": action.duration_ms, "easing": action.easing, "metadata": action.metadata},
+                "path": [],
+                "detail": str(exc),
+                "metadata": {"error": "execution_failed"},
+                "overlay_state": {"visible": overlay_snapshot.visible, "cursor_x": overlay_snapshot.cursor_x, "cursor_y": overlay_snapshot.cursor_y, "trail": [list(point) for point in overlay_snapshot.trail], "metadata": overlay_snapshot.metadata, "last_action_kind": overlay_snapshot.last_action_kind, "last_action_status": overlay_snapshot.last_action_status, "last_target": overlay_snapshot.last_target, "last_error": overlay_snapshot.last_error, "last_verified_at": overlay_snapshot.last_verified_at},
+                "task_state": self._task_store.get(task_id).status if task_id else None,
+            }
         self._overlay_renderer.update_cursor(end[0], end[1])
         self._overlay_renderer.attach_motion(result.phase.value, {"kind": kind, "steps": len(result.path), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "last_target": {"x": end[0], "y": end[1]}})
         self._update_task_state(task_id, action=self._task_motion_event(kind=kind, phase=result.phase, action=action), verified=True)
