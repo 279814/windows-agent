@@ -33,6 +33,12 @@ def register_overlay_tools(registry: ToolRegistry, services: Any) -> None:
             "cursor_x": snapshot.cursor_x,
             "cursor_y": snapshot.cursor_y,
             "trail": [list(point) for point in snapshot.trail],
+            "click_ripples": snapshot.click_ripples,
+            "drag_active": snapshot.drag_active,
+            "drag_start": snapshot.drag_start,
+            "display_id": snapshot.display_id,
+            "scale_factor": snapshot.scale_factor,
+            "monitor_bounds": snapshot.monitor_bounds,
             "metadata": snapshot.metadata,
         }
         if motion_state is not None:

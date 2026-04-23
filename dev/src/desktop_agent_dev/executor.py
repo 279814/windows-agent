@@ -42,6 +42,75 @@ class Executor:
     def _result(self, action: str, detail: str, ok: bool = True, payload: dict[str, Any] | None = None, tool: str | None = None) -> InputResult:
         return InputResult(action=action, ok=ok, detail=detail, payload=payload, tool=tool or action)
 
+    def _overlay_snapshot_payload(self) -> dict[str, Any]:
+        overlay_snapshot = self._overlay_renderer.snapshot()
+        return {
+            "visible": overlay_snapshot.visible,
+            "cursor_x": overlay_snapshot.cursor_x,
+            "cursor_y": overlay_snapshot.cursor_y,
+            "trail": [list(point) for point in overlay_snapshot.trail],
+            "click_ripples": [dict(ripple) for ripple in overlay_snapshot.click_ripples],
+            "drag_active": overlay_snapshot.drag_active,
+            "drag_start": overlay_snapshot.drag_start,
+            "display_id": overlay_snapshot.display_id,
+            "scale_factor": overlay_snapshot.scale_factor,
+            "monitor_bounds": [dict(bounds) for bounds in overlay_snapshot.monitor_bounds],
+            "metadata": dict(overlay_snapshot.metadata),
+            "last_action_kind": overlay_snapshot.last_action_kind,
+            "last_action_status": overlay_snapshot.last_action_status,
+            "last_target": overlay_snapshot.last_target,
+            "last_error": overlay_snapshot.last_error,
+            "last_verified_at": overlay_snapshot.last_verified_at,
+        }
+
+    def _sync_overlay_from_context(self, *, active_window: dict[str, Any] | None = None, phase: str | None = None, kind: str | None = None, target: tuple[int, int] | None = None, drag_start: tuple[int, int] | None = None, drag_active: bool | None = None) -> None:
+        try:
+            display_id = None
+            scale_factor = 1.0
+            monitor_bounds: list[dict[str, int]] = []
+            if hasattr(self._backend, "get_state"):
+                state = self._backend.get_state(use_vision=False, as_bytes=False)
+                display_id = getattr(state, "display_id", None) or getattr(state, "monitor_id", None)
+                scale_factor = float(getattr(state, "dpi_scale", 1.0) or 1.0)
+                bounds = getattr(state, "monitor_bounds", None)
+                if isinstance(bounds, list):
+                    monitor_bounds = [dict(item) for item in bounds if isinstance(item, dict)]
+            self._overlay_renderer.set_display_context(display_id=display_id, scale_factor=scale_factor, monitor_bounds=monitor_bounds)
+            if active_window and active_window.get("handle") is not None:
+                self._overlay_renderer.show()
+            if target is not None:
+                self._overlay_renderer.update_cursor(target[0], target[1])
+            if drag_active is not None:
+                start = None if drag_start is None else {"x": drag_start[0], "y": drag_start[1]}
+                self._overlay_renderer.set_drag_state(drag_active, start=start)
+            if active_window is not None:
+                self._overlay_renderer.attach_motion(
+                    phase or "ready",
+                    {
+                        "kind": kind,
+                        "active_window": active_window,
+                        "last_target": None if target is None else {"x": target[0], "y": target[1]},
+                    },
+                )
+        except Exception:
+            pass
+
+    def _ensure_window_ready(self, name: str | None = None, handle: int | None = None, pid: int | None = None) -> dict[str, Any] | None:
+        active = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
+        if active is None and self._backend is not None and hasattr(self._backend, "focus_app"):
+            target_label = name or ""
+            if handle is not None:
+                self._native_focus_window(handle)
+            else:
+                try:
+                    self._backend.focus_app(target_label)
+                except Exception:
+                    pass
+            active = self._snapshot_window(name, refresh=True, handle=handle, pid=pid, prefer_active=True)
+        if active is not None:
+            self._sync_overlay_from_context(active_window=active, phase="focused", kind="window_focus", target=None)
+        return active
+
     def _task_motion_event(self, *, kind: str, phase: MotionPhase, action: MotionAction | None = None, error_message: str | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "kind": kind,
@@ -726,22 +795,33 @@ class Executor:
         settle_motion = self._virtual_mouse_motion("move", (x, y), (x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1)
         virtual_mouse = self._virtual_mouse_motion("click", (x, y), (x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0)
         payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element, "pre_click_hover": hover_motion, "pre_click_settle": settle_motion, **virtual_mouse}
+        self._overlay_renderer.show()
+        self._overlay_renderer.update_cursor(x, y)
+        self._overlay_renderer.draw_click_ripple(x, y, radius=max(14, 12 + clicks * 4))
         if self._backend is None:
+            payload["overlay_state"] = self._overlay_snapshot_payload()
             return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
 
         if hasattr(self._backend, "click"):
             self._backend.click((x, y), button=button, clicks=clicks)
+            payload["overlay_state"] = self._overlay_snapshot_payload()
             return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
 
         raise ExecutorError("Backend does not expose click().")
 
     def move(self, x: int, y: int, steps: int = 8, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0) -> InputResult:
-        payload = {"x": x, "y": y, "element": self._hit_test_element(x, y), **self._virtual_mouse_motion("move", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)}
+        motion = self._virtual_mouse_motion("move", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+        payload = {"x": x, "y": y, "element": self._hit_test_element(x, y), **motion}
+        self._overlay_renderer.show()
+        self._overlay_renderer.update_cursor(x, y)
+        self._overlay_renderer.attach_motion(motion.get("phase", "move"), {"kind": "move", "steps": len(motion.get("path", [])), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "last_target": {"x": x, "y": y}})
         if self._backend is None:
+            payload["overlay_state"] = self._overlay_snapshot_payload()
             return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
 
         if hasattr(self._backend, "move"):
             self._backend.move((x, y))
+            payload["overlay_state"] = self._overlay_snapshot_payload()
             return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
 
         raise ExecutorError("Backend does not expose move().")
@@ -758,7 +838,13 @@ class Executor:
             "pre_drag_hover": hover_motion,
             **virtual_mouse,
         }
+        self._overlay_renderer.show()
+        self._overlay_renderer.set_drag_state(True, start={"x": start[0], "y": start[1]})
+        self._overlay_renderer.update_cursor(start[0], start[1])
         if self._backend is None:
+            self._overlay_renderer.update_cursor(end[0], end[1])
+            self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+            payload["overlay_state"] = self._overlay_snapshot_payload()
             return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", payload=payload, tool="input_drag")
 
         if hasattr(self._backend, "move") and hasattr(self._backend, "drag"):
@@ -767,8 +853,12 @@ class Executor:
             after_context = self._input_context_snapshot()
             payload["active_window_after"] = after_context["active_window"]
             payload["focused_control_after"] = after_context["focused_control"]
+            self._overlay_renderer.update_cursor(end[0], end[1])
+            self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+            payload["overlay_state"] = self._overlay_snapshot_payload()
             return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", payload=payload, tool="input_drag")
 
+        self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
         raise ExecutorError("Backend does not expose drag support.")
 
     def type_text(
@@ -787,6 +877,8 @@ class Executor:
                 "caret_position": caret_position,
                 "validation": {"passed": True, "expected_change": False, "changed": None},
             }
+            self._overlay_renderer.attach_motion("typing", {"kind": "type", "last_target": None})
+            payload["overlay_state"] = self._overlay_snapshot_payload()
             return self._result("input_type", f"typed:{text}{suffix}", payload=payload, tool="input_type")
 
         if hasattr(self._backend, "type"):
@@ -811,6 +903,8 @@ class Executor:
             except Exception:
                 focused_before = None
                 before_value = None
+            self._overlay_renderer.show()
+            self._overlay_renderer.attach_motion("typing", {"kind": "type", "last_target": {"x": type_loc[0], "y": type_loc[1]}})
             self._backend.type(
                 type_loc,
                 text=text,
@@ -854,6 +948,7 @@ class Executor:
                     "changed": changed,
                 },
             }
+            payload["overlay_state"] = self._overlay_snapshot_payload()
             return self._result("input_type", detail, ok=validation_passed, payload=payload, tool="input_type")
 
         raise ExecutorError("Backend does not expose type().")
@@ -963,6 +1058,7 @@ class Executor:
                 "focus_after": focus_after,
                 "focus_changed": (focus_before != focus_after) if (focus_before is not None or focus_after is not None) else None,
                 "injection_result": {"status": "sent", "method": "backend.shortcut"},
+                "overlay_state": self._overlay_snapshot_payload(),
             }
             return self._result("input_shortcut", f"shortcut:{keys}", payload=payload, tool="input_shortcut")
 
@@ -1591,8 +1687,11 @@ class Executor:
         raise ExecutorError("Backend does not expose switch_app().")
 
     def focus_window(self, name: str, handle: int | None = None, pid: int | None = None) -> InputResult:
+        active = self._ensure_window_ready(name=name, handle=handle, pid=pid)
         if self._backend is None:
-            return self._result("window_focus", f"focus:{name}", tool="window_focus")
+            payload = self._window_payload(target_window=name, before={"name": name, "status": None, "handle": handle, "pid": pid}, after=active, verified=False)
+            payload["overlay_state"] = self._overlay_snapshot_payload()
+            return self._result("window_focus", f"focus:{name}", payload=payload, tool="window_focus")
 
         if hasattr(self._backend, "focus_app"):
             previous = self._snapshot_window(refresh=True)
@@ -1658,6 +1757,7 @@ class Executor:
                     "backend_response_code": status,
                     "verified": verified,
                     "strategy": strategy,
+                    "overlay_state": self._overlay_snapshot_payload(),
                 },
                 tool="window_focus",
             )
@@ -1778,7 +1878,7 @@ class Executor:
             )
 
         if self._backend is None:
-            return self._result(
+            result = self._result(
                 "window_close",
                 f"close:{name}",
                 ok=False,
@@ -1793,9 +1893,11 @@ class Executor:
                     "after_window": None,
                     "post_close_verified": False,
                     "outcome": "capability_missing",
+                    "overlay_state": self._overlay_snapshot_payload(),
                 },
                 tool="window_close",
             )
+            return result
 
         before = _capture_state()
         target_before, matched_by = self._resolve_target_window(name=name, handle=handle, pid=pid, refresh=False, prefer_active=True)
@@ -1818,6 +1920,8 @@ class Executor:
                 target_label,
             )
             if result.ok:
+                if result.payload is not None:
+                    result.payload["overlay_state"] = self._overlay_snapshot_payload()
                 return result
 
         close_app = getattr(self._backend, "close_app", None)
@@ -1828,6 +1932,8 @@ class Executor:
             after = _capture_state()
             result = _close_outcome(before, after, detail, exit_code, "backend.close_app", response, "wm_close", matched_by, target_label)
             if result.ok:
+                if result.payload is not None:
+                    result.payload["overlay_state"] = self._overlay_snapshot_payload()
                 return result
             if target_handle is not None and self._native_close_window(target_handle):
                 time.sleep(0.15)
