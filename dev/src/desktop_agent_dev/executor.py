@@ -69,17 +69,8 @@ class Executor:
 
     def _sync_overlay_from_context(self, *, active_window: dict[str, Any] | None = None, phase: str | None = None, kind: str | None = None, target: tuple[int, int] | None = None, drag_start: tuple[int, int] | None = None, drag_active: bool | None = None, pause_ms: int | None = None, highlight: bool = False, tail_ms: int | None = None, status: OverlayTransitionState | None = None, interruption_state: InterruptionState | None = None, window_state: WindowLifecycleState | None = None) -> None:
         try:
-            display_id = None
-            scale_factor = 1.0
-            monitor_bounds: list[dict[str, int]] = []
-            if hasattr(self._backend, "get_state"):
-                state = self._backend.get_state(use_vision=False, as_bytes=False)
-                display_id = getattr(state, "display_id", None) or getattr(state, "monitor_id", None)
-                scale_factor = float(getattr(state, "dpi_scale", 1.0) or 1.0)
-                bounds = getattr(state, "monitor_bounds", None)
-                if isinstance(bounds, list):
-                    monitor_bounds = [dict(item) for item in bounds if isinstance(item, dict)]
-            self._overlay_renderer.set_display_context(display_id=display_id, scale_factor=scale_factor, monitor_bounds=monitor_bounds)
+            display = self._display_context()
+            self._overlay_renderer.set_display_context(display_id=display["display_id"], scale_factor=display["scale_factor"], monitor_bounds=display["monitor_bounds"])
             if active_window and active_window.get("handle") is not None:
                 self._overlay_renderer.show()
             if target is not None:
@@ -216,40 +207,55 @@ class Executor:
             "target_verification": payload.get("target_verification"),
         }
 
-    def _normalize_input_point(self, point: tuple[int, int], context: dict[str, Any] | None = None) -> tuple[int, int]:
+    def _display_context(self, context: dict[str, Any] | None = None) -> dict[str, Any]:
         context = context or self._input_context_snapshot()
-        scale_factor = float(context.get("scale_factor") or 1.0)
-        monitor_bounds = context.get("monitor_bounds") or []
+        monitor_bounds: list[dict[str, int]] = []
+        for bounds in context.get("monitor_bounds") or []:
+            if not isinstance(bounds, dict):
+                continue
+            try:
+                monitor_bounds.append({
+                    "left": int(bounds.get("left", 0)),
+                    "top": int(bounds.get("top", 0)),
+                    "right": int(bounds.get("right", 0)),
+                    "bottom": int(bounds.get("bottom", 0)),
+                })
+            except Exception:
+                continue
+        return {"display_id": context.get("display_id"), "scale_factor": float(context.get("scale_factor") or 1.0), "monitor_bounds": monitor_bounds}
+
+    def _point_display_origin(self, x: int, y: int, monitor_bounds: list[dict[str, int]]) -> dict[str, int]:
+        if not monitor_bounds:
+            return {"left": 0, "top": 0, "right": 0, "bottom": 0}
+        for bounds in monitor_bounds:
+            left = int(bounds.get("left", 0))
+            top = int(bounds.get("top", 0))
+            right = int(bounds.get("right", 0))
+            bottom = int(bounds.get("bottom", 0))
+            if left <= x <= right and top <= y <= bottom:
+                return {"left": left, "top": top, "right": right, "bottom": bottom}
+        nearest = min(monitor_bounds, key=lambda bounds: abs(x - int(bounds.get("left", 0))) + abs(y - int(bounds.get("top", 0))))
+        return {"left": int(nearest.get("left", 0)), "top": int(nearest.get("top", 0)), "right": int(nearest.get("right", 0)), "bottom": int(nearest.get("bottom", 0))}
+
+    def _normalize_input_point(self, point: tuple[int, int], context: dict[str, Any] | None = None) -> tuple[int, int]:
+        display = self._display_context(context)
+        scale_factor = float(display.get("scale_factor") or 1.0)
+        monitor_bounds = display.get("monitor_bounds") or []
         x, y = int(point[0]), int(point[1])
         if scale_factor and scale_factor != 1.0:
             x = int(round(x * scale_factor))
             y = int(round(y * scale_factor))
-        if monitor_bounds:
-            matched = False
-            for bounds in monitor_bounds:
-                try:
-                    left = int(bounds.get("left", 0))
-                    top = int(bounds.get("top", 0))
-                    right = int(bounds.get("right", 0))
-                    bottom = int(bounds.get("bottom", 0))
-                except Exception:
-                    continue
-                if left <= x <= right and top <= y <= bottom:
-                    matched = True
-                    break
-            if not matched:
-                origin = monitor_bounds[0]
-                try:
-                    x += int(origin.get("left", 0))
-                    y += int(origin.get("top", 0))
-                except Exception:
-                    pass
+        origin = self._point_display_origin(x, y, monitor_bounds)
+        if origin.get("left") or origin.get("top"):
+            x += int(origin.get("left", 0))
+            y += int(origin.get("top", 0))
         return x, y
 
     def _drive_motion(self, *, kind: str, start: tuple[int, int], end: tuple[int, int], steps: int, hover_ms: int, jitter_px: int, accel: float, decel: float, context: dict[str, Any] | None = None) -> dict[str, Any]:
-        start = self._normalize_input_point(start, context)
-        end = self._normalize_input_point(end, context)
-        action = self._motion_scheduler.plan(kind=kind, start=start, end=end, metadata={"kind": kind}, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+        display = self._display_context(context)
+        start = self._normalize_input_point(start, display)
+        end = self._normalize_input_point(end, display)
+        action = self._motion_scheduler.plan(kind=kind, start=start, end=end, metadata={"kind": kind, **display}, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
         result = self._motion_scheduler.execute(action, steps=steps)
         self._overlay_renderer.show()
         self._overlay_renderer.attach_motion(result.phase.value, self._task_motion_event(kind=kind, phase=result.phase, action=action))
@@ -267,7 +273,7 @@ class Executor:
                     "jitter_px": result.action.jitter_px,
                     "accel": result.action.accel,
                     "decel": result.action.decel,
-                    "metadata": result.action.metadata,
+                    "metadata": {**result.action.metadata, "display_id": display.get("display_id"), "scale_factor": display.get("scale_factor"), "monitor_bounds": display.get("monitor_bounds")},
                 },
                 "path": [{"x": point.x, "y": point.y, "t": point.t} for point in result.path],
                 "detail": result.detail,
@@ -1855,6 +1861,34 @@ class Executor:
         except Exception:
             return False
 
+    @staticmethod
+    def _backend_hint_is_access_denied(detail: str | None) -> bool:
+        if not detail:
+            return False
+        text = detail.casefold()
+        return any(token in text for token in ("access denied", "permission denied", "elevated", "administrator", "admin rights", "uac"))
+
+    @staticmethod
+    def _window_uac_suspected(snapshot: dict[str, Any] | None, detail: str | None = None) -> bool:
+        if snapshot is None:
+            return Executor._backend_hint_is_access_denied(detail)
+        title = str(snapshot.get("name") or snapshot.get("window_title") or "").casefold()
+        if "administrator" in title or "admin" in title:
+            return True
+        return Executor._backend_hint_is_access_denied(detail)
+
+    @staticmethod
+    def _failure_feedback(operation: str, detail: str, *, uac_suspected: bool = False, minimized: bool = False, verified: bool = False) -> str:
+        if verified:
+            return detail
+        if uac_suspected:
+            return f"{operation} failed: target window likely requires administrator approval or elevated permissions."
+        if minimized:
+            return f"{operation} failed: target window appears minimized and could not be restored."
+        if detail and detail.lower().startswith(("failed", "error")):
+            return detail
+        return f"{operation} failed: verification did not match the expected window state."
+
     def switch_window(self, name: str, handle: int | None = None, pid: int | None = None) -> InputResult:
         previous = self._snapshot_window(refresh=True)
         target_before, matched_by = self._resolve_target_window(name=name, handle=handle, pid=pid, refresh=True, prefer_active=True)
@@ -1921,6 +1955,7 @@ class Executor:
                 backend_response_detail = result_detail
                 backend_response_code = 0
             restored_from_minimized = self._window_is_minimized(target_before)
+            uac_suspected = self._window_uac_suspected(target_before, backend_response_detail)
             payload = {
                 **self._window_payload(target_window=target_label, before=previous, after=current),
                 "name": name,
@@ -1930,6 +1965,7 @@ class Executor:
                 "current_handle": current.get("handle") if current else None,
                 "matched_by": current_matched_by,
                 "restored_from_minimized": restored_from_minimized,
+                "uac_suspected": uac_suspected,
                 "backend_response": backend_response,
                 "backend_response_detail": backend_response_detail,
                 "backend_response_code": backend_response_code,
