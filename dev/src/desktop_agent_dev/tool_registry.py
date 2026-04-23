@@ -200,12 +200,18 @@ class ToolRegistry:
                 "task": "low",
             },
             "high_risk_actions": ["window_close", "window_launch", "input_launch_app"],
+            "extension_rules": [
+                "Do not modify existing tool implementations unless the user explicitly requests it.",
+                "Prefer adding new tools, wrappers, registries, or tests instead of rewriting existing handlers.",
+                "Keep new capabilities isolated so existing input, window, task, and snapshot behavior remains stable.",
+            ],
             "notes": [
                 "High-risk actions remain gated by the safety service.",
                 "Tool metadata is normalized for MCP client catalogs and handbooks.",
                 "Window tools support handle/pid-aware targeting and report verification-oriented payload fields for post-action auditing.",
                 "Several input tools are dispatch-confirming by design; pair them with desktop_snapshot when richer post-action verification is required.",
                 "TODO placeholder vision tools intentionally return not_implemented responses until their pipelines are built.",
+                "New motion and overlay tools are additive and must not alter legacy tool execution paths.",
             ],
         }
 
@@ -251,11 +257,13 @@ def build_registry() -> ToolRegistry:
 
 
 def register_tool_specs(server: Any) -> ToolRegistry:
-    from .tool_specs import register_desktop_tools, register_input_tools, register_task_tools, register_vision_tools, register_window_tools
+    from .tool_specs import register_desktop_tools, register_input_tools, register_motion_tools, register_overlay_tools, register_task_tools, register_vision_tools, register_window_tools
 
     registry = build_registry()
     register_desktop_tools(registry, server.services)
     register_input_tools(registry, server.services)
+    register_motion_tools(registry, server.services)
+    register_overlay_tools(registry, server.services)
     register_window_tools(registry, server.services)
     register_task_tools(registry, server.services)
     register_vision_tools(registry, server.services)

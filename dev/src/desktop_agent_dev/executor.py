@@ -38,6 +38,27 @@ class Executor:
     def _result(self, action: str, detail: str, ok: bool = True, payload: dict[str, Any] | None = None, tool: str | None = None) -> InputResult:
         return InputResult(action=action, ok=ok, detail=detail, payload=payload, tool=tool or action)
 
+    def motion_preview(self, kind: str, start: tuple[int, int], end: tuple[int, int], duration_ms: int | None = None, steps: int = 16) -> dict[str, Any]:
+        action = self._motion_scheduler.plan(kind=kind, start=start, end=end, duration_ms=duration_ms)
+        result = self._motion_scheduler.run(action, steps=steps)
+        self._overlay_renderer.update_cursor(end[0], end[1])
+        return {
+            "ok": result.ok,
+            "phase": result.phase,
+            "action": {
+                "kind": result.action.kind,
+                "start": {"x": result.action.start.x, "y": result.action.start.y},
+                "end": {"x": result.action.end.x, "y": result.action.end.y},
+                "duration_ms": result.action.duration_ms,
+                "easing": result.action.easing,
+                "metadata": result.action.metadata,
+            },
+            "path": [{"x": point.x, "y": point.y, "t": point.t} for point in result.path],
+            "detail": result.detail,
+            "metadata": result.metadata,
+            "overlay_state": self._overlay_renderer.snapshot().__dict__,
+        }
+
     _SHORTCUT_NOISE_PATTERNS = (
         r"\s*-\s*快捷方式$",
         r"\s*快捷方式$",

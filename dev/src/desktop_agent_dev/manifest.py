@@ -174,6 +174,7 @@ def build_security(registry: ToolRegistry) -> dict[str, Any]:
                     "Window-control success is verification-driven: backend success alone is not treated as sufficient when foreground, handle, visibility, or geometry checks disagree.",
                     "Input actions with lighter payloads are still safe to expose, but clients should pair them with fresh observations when they need stronger auditability.",
                     "Placeholder vision tools are intentionally exposed as TODO/not-implemented so clients can branch to fallback strategies.",
+                    "New motion and overlay tools are additive helpers and should not be used to rewrite legacy tool execution flows.",
                 ],
             },
             {

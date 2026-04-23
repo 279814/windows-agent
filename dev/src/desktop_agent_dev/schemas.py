@@ -23,6 +23,8 @@ ToolName = Literal[
     "window_minimize",
     "window_maximize",
     "window_restore",
+    "motion_preview",
+    "overlay_state",
     "task_plan",
     "task_state",
 ]
