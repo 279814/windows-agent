@@ -38,13 +38,26 @@ class Executor:
     def _result(self, action: str, detail: str, ok: bool = True, payload: dict[str, Any] | None = None, tool: str | None = None) -> InputResult:
         return InputResult(action=action, ok=ok, detail=detail, payload=payload, tool=tool or action)
 
-    def motion_preview(self, kind: str, start: tuple[int, int], end: tuple[int, int], duration_ms: int | None = None, steps: int = 16) -> dict[str, Any]:
-        action = self._motion_scheduler.plan(kind=kind, start=start, end=end, duration_ms=duration_ms)
+    def motion_preview(
+        self,
+        kind: str,
+        start: tuple[int, int],
+        end: tuple[int, int],
+        duration_ms: int | None = None,
+        steps: int = 16,
+        hover_ms: int = 0,
+        jitter_px: int = 0,
+        accel: float = 1.0,
+        decel: float = 1.0,
+    ) -> dict[str, Any]:
+        action = self._motion_scheduler.plan(kind=kind, start=start, end=end, duration_ms=duration_ms, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
         result = self._motion_scheduler.run(action, steps=steps)
         self._overlay_renderer.update_cursor(end[0], end[1])
+        self._overlay_renderer.attach_motion(result.phase.value, {"kind": kind, "steps": len(result.path), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel})
+        overlay_snapshot = self._overlay_renderer.snapshot()
         return {
             "ok": result.ok,
-            "phase": result.phase,
+            "phase": result.phase.value,
             "action": {
                 "kind": result.action.kind,
                 "start": {"x": result.action.start.x, "y": result.action.start.y},
@@ -56,7 +69,13 @@ class Executor:
             "path": [{"x": point.x, "y": point.y, "t": point.t} for point in result.path],
             "detail": result.detail,
             "metadata": result.metadata,
-            "overlay_state": self._overlay_renderer.snapshot().__dict__,
+            "overlay_state": {
+                "visible": overlay_snapshot.visible,
+                "cursor_x": overlay_snapshot.cursor_x,
+                "cursor_y": overlay_snapshot.cursor_y,
+                "trail": [list(point) for point in overlay_snapshot.trail],
+                "metadata": overlay_snapshot.metadata,
+            },
         }
 
     _SHORTCUT_NOISE_PATTERNS = (
@@ -560,9 +579,57 @@ class Executor:
 
         return {"type": "unknown", "name": None, "found": False, "confidence": 0.0}
 
-    def click(self, x: int, y: int, button: str = "left", clicks: int = 1) -> InputResult:
+    def _virtual_mouse_motion(
+        self,
+        kind: str,
+        start: tuple[int, int],
+        end: tuple[int, int],
+        duration_ms: int | None = None,
+        steps: int = 16,
+        hover_ms: int = 0,
+        jitter_px: int = 0,
+        accel: float = 1.0,
+        decel: float = 1.0,
+    ) -> dict[str, Any]:
+        action = self._motion_scheduler.plan(kind=kind, start=start, end=end, duration_ms=duration_ms, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+        result = self._motion_scheduler.run(action, steps=steps)
+        self._overlay_renderer.update_cursor(end[0], end[1])
+        self._overlay_renderer.attach_motion(result.phase.value, {"kind": kind, "steps": len(result.path), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel})
+        overlay_snapshot = self._overlay_renderer.snapshot()
+        return {
+            "motion": {
+                "ok": result.ok,
+                "phase": result.phase.value,
+                "action": {
+                    "kind": result.action.kind,
+                    "start": {"x": result.action.start.x, "y": result.action.start.y},
+                    "end": {"x": result.action.end.x, "y": result.action.end.y},
+                    "duration_ms": result.action.duration_ms,
+                    "easing": result.action.easing,
+                    "hover_ms": result.action.hover_ms,
+                    "jitter_px": result.action.jitter_px,
+                    "accel": result.action.accel,
+                    "decel": result.action.decel,
+                    "metadata": result.action.metadata,
+                },
+                "path": [{"x": point.x, "y": point.y, "t": point.t} for point in result.path],
+                "detail": result.detail,
+                "metadata": result.metadata,
+            },
+            "overlay_state": {
+                "visible": overlay_snapshot.visible,
+                "cursor_x": overlay_snapshot.cursor_x,
+                "cursor_y": overlay_snapshot.cursor_y,
+                "trail": [list(point) for point in overlay_snapshot.trail],
+                "metadata": overlay_snapshot.metadata,
+            },
+        }
+
+    def click(self, x: int, y: int, button: str = "left", clicks: int = 1, hover_ms: int = 80, jitter_px: int = 1) -> InputResult:
         element = self._hit_test_element(x, y)
-        payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element}
+        hover_motion = self._virtual_mouse_motion("hover", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
+        virtual_mouse = self._virtual_mouse_motion("click", (x, y), (x, y), steps=2, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0)
+        payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element, "pre_click_hover": hover_motion, **virtual_mouse}
         if self._backend is None:
             return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
 
@@ -572,8 +639,8 @@ class Executor:
 
         raise ExecutorError("Backend does not expose click().")
 
-    def move(self, x: int, y: int) -> InputResult:
-        payload = {"x": x, "y": y, "element": self._hit_test_element(x, y)}
+    def move(self, x: int, y: int, steps: int = 8, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0) -> InputResult:
+        payload = {"x": x, "y": y, "element": self._hit_test_element(x, y), **self._virtual_mouse_motion("move", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)}
         if self._backend is None:
             return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
 
@@ -583,13 +650,17 @@ class Executor:
 
         raise ExecutorError("Backend does not expose move().")
 
-    def drag(self, start: tuple[int, int], end: tuple[int, int]) -> InputResult:
+    def drag(self, start: tuple[int, int], end: tuple[int, int], steps: int = 16, hover_ms: int = 120, jitter_px: int = 1, accel: float = 1.0, decel: float = 1.1) -> InputResult:
         before_context = self._input_context_snapshot()
+        hover_motion = self._virtual_mouse_motion("hover", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), start, steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
+        virtual_mouse = self._virtual_mouse_motion("drag", start, end, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
         payload = {
             "start": {"x": start[0], "y": start[1], "element": self._hit_test_element(start[0], start[1])},
             "end": {"x": end[0], "y": end[1], "element": self._hit_test_element(end[0], end[1])},
             "active_window_before": before_context["active_window"],
             "focused_control_before": before_context["focused_control"],
+            "pre_drag_hover": hover_motion,
+            **virtual_mouse,
         }
         if self._backend is None:
             return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", payload=payload, tool="input_drag")

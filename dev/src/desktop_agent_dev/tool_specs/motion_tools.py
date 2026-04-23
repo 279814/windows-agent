@@ -39,20 +39,31 @@ def register_motion_tools(registry: ToolRegistry, services: Any) -> None:
             "end_y": {"type": "integer"},
             "duration_ms": {"type": "integer"},
             "steps": {"type": "integer"},
+            "hover_ms": {"type": "integer"},
+            "jitter_px": {"type": "integer"},
+            "accel": {"type": "number"},
+            "decel": {"type": "number"},
         },
         "required": ["kind", "start_x", "start_y", "end_x", "end_y"],
     }
 
-    def motion_preview(kind: str, start_x: int, start_y: int, end_x: int, end_y: int, duration_ms: int | None = None, steps: int = 16) -> dict[str, Any]:
+    def motion_preview(kind: str, start_x: int, start_y: int, end_x: int, end_y: int, duration_ms: int | None = None, steps: int = 16, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0) -> dict[str, Any]:
         if not services.safety.check("motion_preview"):
             return error("motion_preview", "blocked by safety gate")
-        result = services.executor.motion_preview(kind, (start_x, start_y), (end_x, end_y), duration_ms=duration_ms, steps=steps)
+        try:
+            result = services.executor.motion_preview(kind, (start_x, start_y), (end_x, end_y), duration_ms=duration_ms, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+        except TypeError:
+            result = services.executor.motion_preview(kind, (start_x, start_y), (end_x, end_y), duration_ms=duration_ms, steps=steps)
         response = ok("motion_preview", input_payload("motion_preview", result["ok"], result["detail"], {
             "kind": kind,
             "start": {"x": start_x, "y": start_y},
             "end": {"x": end_x, "y": end_y},
             "duration_ms": duration_ms or 180,
             "steps": steps,
+            "hover_ms": hover_ms,
+            "jitter_px": jitter_px,
+            "accel": accel,
+            "decel": decel,
             "phase": result["phase"],
             "action": result["action"],
             "path": result["path"],

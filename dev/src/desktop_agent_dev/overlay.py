@@ -32,6 +32,12 @@ class OverlayRenderer:
         if len(self.frame.trail) > 128:
             self.frame.trail = self.frame.trail[-128:]
 
+    def attach_motion(self, phase: str, metadata: dict[str, Any] | None = None) -> None:
+        self.frame.visible = True
+        self.frame.metadata.update({"motion_phase": phase})
+        if metadata:
+            self.frame.metadata.update(metadata)
+
     def snapshot(self) -> OverlayFrame:
         return OverlayFrame(
             visible=self.frame.visible,

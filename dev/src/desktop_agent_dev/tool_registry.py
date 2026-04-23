@@ -17,13 +17,15 @@ def format_tool_doc(*, summary: str, best_for: str, not_recommended_for: str, wa
         parts.extend([f"Implementation: {implementation}"])
     return "\n".join(parts)
 
-ToolKind = Literal["snapshot", "input", "window", "task"]
+ToolKind = Literal["snapshot", "input", "window", "task", "motion", "overlay"]
 
 TOOL_GROUP_TITLES = {
     "snapshot": "Snapshot & Perception",
     "input": "Input & Action",
     "window": "Window Management",
     "task": "Task Orchestration",
+    "motion": "Motion Planning",
+    "overlay": "Overlay Inspection",
 }
 
 TODO_PLACEHOLDER_TOOLS = ("ocr_extract", "ui_match", "vision_capture", "vision_locate")
@@ -170,7 +172,7 @@ class ToolRegistry:
 
     def group_catalog(self) -> list[dict[str, Any]]:
         grouped: dict[str, dict[str, Any]] = {}
-        order = ["snapshot", "input", "window", "task"]
+        order = ["snapshot", "input", "motion", "overlay", "window", "task"]
         for spec in self.specs.values():
             group = grouped.setdefault(
                 spec.kind,

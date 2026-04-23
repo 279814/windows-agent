@@ -225,6 +225,14 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
                     "input_click may expose hit-test metadata when the backend resolves the clicked surface.",
                     "move/drag/scroll/multi-* actions may require desktop_snapshot pairing for stronger post-action verification.",
                 ],
+                "motion_tools": [
+                    "motion_preview is read-only planning.",
+                    "Inspect the path, phase, overlay_state, and metadata fields before using the path as the basis for a real motion or drag step.",
+                ],
+                "overlay_tools": [
+                    "overlay_state is read-only and reports the current virtual cursor and trail state.",
+                    "Use visible, cursor_x, cursor_y, trail, and metadata to confirm overlay availability and current state.",
+                ],
                 "todo_placeholders": "ocr_extract, ui_match, vision_capture, and vision_locate remain TODO placeholders and intentionally return not_implemented.",
             },
             "targeting_semantics": {
@@ -238,8 +246,14 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
             "payload_expectations": {
                 "snapshot": "Rich normalized observation payloads intended for observe-first workflows.",
                 "input": "Payload richness varies by action. Some tools confirm dispatch only; others include focused control, hit-test, or focus-state verification.",
+                "motion": "motion_preview returns a planned motion path plus overlay_state metadata to help clients inspect intended cursor travel before dispatching action-level motion.",
+                "overlay": "overlay_state returns current virtual cursor and trail state as a read-only inspection surface.",
                 "window": "Payloads include before/after target context, backend responses, and verification-oriented fields.",
                 "task": "Planner/state payloads describe workflow progress rather than desktop side effects.",
+            },
+            "discovery_hints": {
+                "motion_preview": "Search tool-index or catalog first if you need a compact enumeration path, then inspect the motion tool entry for planning semantics.",
+                "overlay_state": "Search tool-index or catalog first if you need a compact enumeration path, then inspect the overlay tool entry for read-only state semantics.",
             },
         },
         "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),

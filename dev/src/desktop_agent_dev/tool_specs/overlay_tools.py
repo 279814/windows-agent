@@ -26,15 +26,20 @@ OVERLAY_STATE_OUTPUT_EXAMPLES = [
 def register_overlay_tools(registry: ToolRegistry, services: Any) -> None:
     def overlay_state() -> dict[str, Any]:
         snapshot = services.executor._overlay_renderer.snapshot()
+        motion_scheduler = getattr(services.executor, "_motion_scheduler", None)
+        motion_state = getattr(motion_scheduler, "cursor_state", None) if motion_scheduler is not None else None
+        payload: dict[str, Any] = {
+            "visible": snapshot.visible,
+            "cursor_x": snapshot.cursor_x,
+            "cursor_y": snapshot.cursor_y,
+            "trail": [list(point) for point in snapshot.trail],
+            "metadata": snapshot.metadata,
+        }
+        if motion_state is not None:
+            payload["motion_state"] = motion_state.snapshot()
         return ok(
             "overlay_state",
-            {
-                "visible": snapshot.visible,
-                "cursor_x": snapshot.cursor_x,
-                "cursor_y": snapshot.cursor_y,
-                "trail": [list(point) for point in snapshot.trail],
-                "metadata": snapshot.metadata,
-            },
+            payload,
         )
 
     registry.register(
