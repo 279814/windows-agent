@@ -61,6 +61,7 @@ class Executor:
             "last_target": overlay_snapshot.last_target,
             "last_error": overlay_snapshot.last_error,
             "last_verified_at": overlay_snapshot.last_verified_at,
+            "timeline": [dict(item) for item in overlay_snapshot.timeline],
         }
 
     def _sync_overlay_from_context(self, *, active_window: dict[str, Any] | None = None, phase: str | None = None, kind: str | None = None, target: tuple[int, int] | None = None, drag_start: tuple[int, int] | None = None, drag_active: bool | None = None) -> None:
@@ -116,17 +117,22 @@ class Executor:
         before = self._ensure_window_ready(recover_name, recover_handle, recover_pid)
         if before is not None:
             attempt_notes.append({"step": "ensure_window_ready", "window": before.get("name"), "handle": before.get("handle")})
+        self._overlay_renderer.record_timeline("input_begin", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "begin", "operation": operation, "recover_name": recover_name, "recover_handle": recover_handle, "recover_pid": recover_pid})
         try:
             result = runner()
         except Exception as exc:
             attempt_notes.append({"step": "runner_error", "error": str(exc)})
+            self._overlay_renderer.record_timeline("input_error", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "error", "operation": operation, "error": str(exc)})
             before_retry = self._ensure_window_ready(recover_name, recover_handle, recover_pid)
             attempt_notes.append({"step": "recover_window", "window": None if before_retry is None else before_retry.get("name"), "handle": None if before_retry is None else before_retry.get("handle")})
+            self._overlay_renderer.record_timeline("input_retry", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "retry", "operation": operation, "window": None if before_retry is None else before_retry.get("name")})
             result = runner()
+        self._overlay_renderer.record_timeline("input_end", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "end", "operation": operation, "ok": result.ok, "detail": result.detail})
         if result.payload is None:
             result.payload = {}
         result.payload["recovery_attempts"] = attempt_notes
         result.payload["overlay_state"] = self._overlay_snapshot_payload()
+        result.payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
         return result
 
     def _task_motion_event(self, *, kind: str, phase: MotionPhase, action: MotionAction | None = None, error_message: str | None = None) -> dict[str, Any]:
@@ -807,8 +813,48 @@ class Executor:
             },
         }
 
+    def _verify_click_target(self, before_context: dict[str, Any], after_context: dict[str, Any], *, element: dict[str, Any] | None, button: str, clicks: int) -> dict[str, Any]:
+        before_focus = before_context.get("focused_control")
+        after_focus = after_context.get("focused_control")
+        before_window = before_context.get("active_window")
+        after_window = after_context.get("active_window")
+        focus_changed = before_focus != after_focus
+        window_changed = before_window != after_window
+        ok = focus_changed or window_changed or element is not None
+        return {
+            "ok": ok,
+            "reason": "focus_changed" if focus_changed else ("window_changed" if window_changed else "element_targeted"),
+            "before": {"active_window": before_window, "focused_control": before_focus},
+            "after": {"active_window": after_window, "focused_control": after_focus},
+            "focus_changed": focus_changed,
+            "window_changed": window_changed,
+            "element": element,
+            "button": button,
+            "clicks": clicks,
+        }
+
+    def _verify_drag_target(self, before_context: dict[str, Any], after_context: dict[str, Any], *, start: tuple[int, int], end: tuple[int, int]) -> dict[str, Any]:
+        before_focus = before_context.get("focused_control")
+        after_focus = after_context.get("focused_control")
+        before_window = before_context.get("active_window")
+        after_window = after_context.get("active_window")
+        focus_changed = before_focus != after_focus
+        window_changed = before_window != after_window
+        ok = after_window is not None and (window_changed or focus_changed or after_focus is not None)
+        return {
+            "ok": ok,
+            "reason": "window_changed" if window_changed else ("focus_changed" if focus_changed else "state_read"),
+            "before": {"active_window": before_window, "focused_control": before_focus},
+            "after": {"active_window": after_window, "focused_control": after_focus},
+            "focus_changed": focus_changed,
+            "window_changed": window_changed,
+            "start": {"x": start[0], "y": start[1]},
+            "end": {"x": end[0], "y": end[1]},
+        }
+
     def click(self, x: int, y: int, button: str = "left", clicks: int = 1, hover_ms: int = 80, jitter_px: int = 1) -> InputResult:
         def runner() -> InputResult:
+            before_context = self._input_context_snapshot()
             element = self._hit_test_element(x, y)
             hover_motion = self._virtual_mouse_motion("hover", (self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), (x, y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2)
             settle_motion = self._virtual_mouse_motion("move", (x, y), (x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1)
@@ -818,13 +864,23 @@ class Executor:
             self._overlay_renderer.update_cursor(x, y)
             self._overlay_renderer.draw_click_ripple(x, y, radius=max(14, 12 + clicks * 4))
             if self._backend is None:
+                after_context = self._input_context_snapshot()
+                payload["target_verification"] = self._verify_click_target(before_context, after_context, element=element, button=button, clicks=clicks)
                 payload["overlay_state"] = self._overlay_snapshot_payload()
-                return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
+                payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
+                return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_click")
 
+            if hasattr(self._backend, "move"):
+                self._backend.move((x, y))
             if hasattr(self._backend, "click"):
+                self._overlay_renderer.record_timeline("click_down", {"at": datetime.now(timezone.utc).isoformat(), "kind": "click", "phase": "down", "x": x, "y": y, "button": button, "clicks": clicks})
                 self._backend.click((x, y), button=button, clicks=clicks)
+                self._overlay_renderer.record_timeline("click_up", {"at": datetime.now(timezone.utc).isoformat(), "kind": "click", "phase": "up", "x": x, "y": y, "button": button, "clicks": clicks})
+                after_context = self._input_context_snapshot()
+                payload["target_verification"] = self._verify_click_target(before_context, after_context, element=element, button=button, clicks=clicks)
                 payload["overlay_state"] = self._overlay_snapshot_payload()
-                return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", payload=payload, tool="input_click")
+                payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
+                return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_click")
 
             raise ExecutorError("Backend does not expose click().")
 
@@ -839,11 +895,15 @@ class Executor:
             self._overlay_renderer.attach_motion(motion.get("phase", "move"), {"kind": "move", "steps": len(motion.get("path", [])), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "last_target": {"x": x, "y": y}})
             if self._backend is None:
                 payload["overlay_state"] = self._overlay_snapshot_payload()
+                payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
+                payload["target_verification"] = {"ok": True, "reason": "synthetic_backend"}
                 return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
 
             if hasattr(self._backend, "move"):
                 self._backend.move((x, y))
                 payload["overlay_state"] = self._overlay_snapshot_payload()
+                payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
+                payload["target_verification"] = {"ok": True, "reason": "cursor_reached"}
                 return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
 
             raise ExecutorError("Backend does not expose move().")
@@ -864,24 +924,35 @@ class Executor:
                 **virtual_mouse,
             }
             self._overlay_renderer.show()
+            self._overlay_renderer.record_timeline("drag_prepare", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "prepare", "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}})
             self._overlay_renderer.set_drag_state(True, start={"x": start[0], "y": start[1]})
             self._overlay_renderer.update_cursor(start[0], start[1])
             if self._backend is None:
                 self._overlay_renderer.update_cursor(end[0], end[1])
                 self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+                payload["target_verification"] = self._verify_drag_target(before_context, before_context, start=start, end=end)
                 payload["overlay_state"] = self._overlay_snapshot_payload()
-                return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", payload=payload, tool="input_drag")
+                payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
+                return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_drag")
 
             if hasattr(self._backend, "move") and hasattr(self._backend, "drag"):
                 self._backend.move(start)
+                if hasattr(self._backend, "mouse_down"):
+                    self._backend.mouse_down(start)
+                self._overlay_renderer.record_timeline("drag_down", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "down", "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}})
                 self._backend.drag(end)
+                if hasattr(self._backend, "mouse_up"):
+                    self._backend.mouse_up(end)
+                self._overlay_renderer.record_timeline("drag_up", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "up", "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}})
                 after_context = self._input_context_snapshot()
                 payload["active_window_after"] = after_context["active_window"]
                 payload["focused_control_after"] = after_context["focused_control"]
+                payload["target_verification"] = self._verify_drag_target(before_context, after_context, start=start, end=end)
                 self._overlay_renderer.update_cursor(end[0], end[1])
                 self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
                 payload["overlay_state"] = self._overlay_snapshot_payload()
-                return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", payload=payload, tool="input_drag")
+                payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
+                return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_drag")
 
             self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
             raise ExecutorError("Backend does not expose drag support.")

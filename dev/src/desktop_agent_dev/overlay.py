@@ -22,6 +22,7 @@ class OverlayFrame:
     last_target: dict[str, int] | None = None
     last_error: str | None = None
     last_verified_at: str | None = None
+    timeline: list[dict[str, Any]] = field(default_factory=list)
 
 
 class OverlayRenderer:
@@ -60,9 +61,26 @@ class OverlayRenderer:
         self.frame.drag_start = None if start is None else {"x": int(start.get("x", 0)), "y": int(start.get("y", 0))}
         self.frame.metadata.update({"drag_active": active, "drag_start": self.frame.drag_start})
 
+    def record_timeline(self, event: str, metadata: dict[str, Any] | None = None) -> None:
+        item = {
+            "event": event,
+            "at": None,
+            "phase": None,
+            "kind": None,
+            "data": {},
+        }
+        if metadata:
+            item.update({k: v for k, v in metadata.items() if k in {"at", "phase", "kind"}})
+            item["data"] = {k: v for k, v in metadata.items() if k not in {"at", "phase", "kind"}}
+        self.frame.timeline.append(item)
+        if len(self.frame.timeline) > 64:
+            self.frame.timeline = self.frame.timeline[-64:]
+        self.frame.metadata["timeline_length"] = len(self.frame.timeline)
+
     def attach_motion(self, phase: str, metadata: dict[str, Any] | None = None) -> None:
         self.frame.visible = True
         self.frame.last_action_status = phase
+        self.record_timeline("motion", {"phase": phase, **({} if metadata is None else metadata)})
         self.frame.metadata.update({"motion_phase": phase})
         if metadata:
             self.frame.metadata.update(metadata)
@@ -93,4 +111,5 @@ class OverlayRenderer:
             last_target=None if self.frame.last_target is None else dict(self.frame.last_target),
             last_error=self.frame.last_error,
             last_verified_at=self.frame.last_verified_at,
+            timeline=[dict(item) for item in self.frame.timeline],
         )
