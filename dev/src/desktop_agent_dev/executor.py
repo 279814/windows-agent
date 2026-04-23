@@ -194,43 +194,169 @@ class Executor:
             return None, None
         return getattr(state, "active_window", None), getattr(state, "windows", None)
 
+    def _safe_backend_state(self) -> Any | None:
+        backend = self._backend
+        if backend is None:
+            return None
+        getter = getattr(backend, "get_state", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter(use_vision=False, as_bytes=False)
+        except TypeError:
+            try:
+                return getter()
+            except Exception:
+                return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _coerce_bounds(bounds: Any) -> dict[str, int] | None:
+        if bounds is None:
+            return None
+        if isinstance(bounds, dict):
+            left = bounds.get("left")
+            top = bounds.get("top")
+            right = bounds.get("right")
+            bottom = bounds.get("bottom")
+        elif isinstance(bounds, (list, tuple)) and len(bounds) == 4:
+            left, top, right, bottom = bounds
+        else:
+            left = getattr(bounds, "left", None)
+            top = getattr(bounds, "top", None)
+            right = getattr(bounds, "right", None)
+            bottom = getattr(bounds, "bottom", None)
+        if None in {left, top, right, bottom}:
+            return None
+        try:
+            return {
+                "left": int(left),
+                "top": int(top),
+                "right": int(right),
+                "bottom": int(bottom),
+            }
+        except Exception:
+            return None
+
+    @classmethod
+    def _point_within_bounds(cls, x: int, y: int, bounds: Any) -> bool:
+        coerced = cls._coerce_bounds(bounds)
+        if coerced is None:
+            return False
+        return coerced["left"] <= x <= coerced["right"] and coerced["top"] <= y <= coerced["bottom"]
+
+    def _serialize_control(self, control: Any) -> dict[str, Any] | None:
+        if control is None:
+            return None
+        if isinstance(control, dict):
+            bounds = self._coerce_bounds(control.get("bounds") or control.get("bounding_box"))
+            return {
+                "name": control.get("name"),
+                "value": control.get("value"),
+                "text": control.get("text"),
+                "control_type": control.get("control_type") or control.get("type"),
+                "automation_id": control.get("automation_id"),
+                "class_name": control.get("class_name"),
+                "role": control.get("role"),
+                "bounds": bounds,
+                "window_title": control.get("window_title"),
+                "process_id": control.get("process_id") or control.get("pid"),
+                "handle": control.get("handle"),
+                "source": control.get("source"),
+            }
+        bounds = self._coerce_bounds(getattr(control, "bounds", None) or getattr(control, "bounding_box", None))
+        return {
+            "name": getattr(control, "name", None),
+            "value": getattr(control, "value", None),
+            "text": getattr(control, "text", None),
+            "control_type": getattr(control, "control_type", None) or getattr(control, "type", None),
+            "automation_id": getattr(control, "automation_id", None),
+            "class_name": getattr(control, "class_name", None),
+            "role": getattr(control, "role", None),
+            "bounds": bounds,
+            "window_title": getattr(control, "window_title", None),
+            "process_id": getattr(control, "process_id", None) or getattr(control, "pid", None),
+            "handle": getattr(control, "handle", None),
+            "source": getattr(control, "source", None),
+        }
+
+    def _input_context_snapshot(self) -> dict[str, Any]:
+        state = self._safe_backend_state()
+        if state is None:
+            return {"active_window": None, "focused_control": None}
+        return {
+            "active_window": self._window_to_snapshot(getattr(state, "active_window", None)),
+            "focused_control": self._serialize_control(getattr(state, "focused_control", None)),
+        }
+
     def _hit_test_element(self, x: int, y: int) -> dict[str, Any]:
         backend = self._backend
         if backend is None:
             return {"type": "unknown", "name": None, "found": False, "confidence": 0.0}
 
+        def _node_attr(node: Any, key: str, default: Any = None) -> Any:
+            if isinstance(node, dict):
+                return node.get(key, default)
+            return getattr(node, key, default)
+
+        def _node_bounds(node: Any) -> dict[str, int] | None:
+            return self._coerce_bounds(_node_attr(node, "bounding_box") or _node_attr(node, "bounds"))
+
+        def _semantic_role(node: Any) -> str | None:
+            text = " ".join(
+                str(part or "").casefold()
+                for part in (
+                    _node_attr(node, "control_type"),
+                    _node_attr(node, "role"),
+                    _node_attr(node, "class_name"),
+                    _node_attr(node, "name"),
+                    _node_attr(node, "automation_id"),
+                )
+            )
+            if any(token in text for token in ("document", "editor", "richedit", "text area", "textarea")):
+                return "document"
+            if any(token in text for token in ("edit", "textbox", "text box", "textinput")):
+                return "text_input"
+            if "button" in text:
+                return "button"
+            if any(token in text for token in ("list", "tree", "grid")):
+                return "collection"
+            return None
+
         def _node_meta(node: Any) -> dict[str, Any]:
+            semantic_role = _semantic_role(node)
+            bounds = _node_bounds(node)
             return {
-                "type": getattr(node, "control_type", "unknown") or "unknown",
-                "name": getattr(node, "name", None),
-                "automation_id": getattr(node, "automation_id", None),
-                "class_name": getattr(node, "class_name", None),
-                "role": getattr(node, "role", None),
-                "process_id": getattr(node, "process_id", None),
-                "window_title": getattr(node, "window_title", None),
+                "type": _node_attr(node, "control_type", "unknown") or semantic_role or "unknown",
+                "name": _node_attr(node, "name", None),
+                "automation_id": _node_attr(node, "automation_id", None),
+                "class_name": _node_attr(node, "class_name", None),
+                "role": _node_attr(node, "role", None),
+                "process_id": _node_attr(node, "process_id", None) or _node_attr(node, "pid", None),
+                "window_title": _node_attr(node, "window_title", None),
+                "semantic_role": semantic_role,
+                "bounds": bounds,
             }
 
-        def _bbox_area(box: Any) -> int:
-            return max(1, (box.right - box.left)) * max(1, (box.bottom - box.top))
-
         def _is_decorative(node: Any) -> bool:
-            control_type = (getattr(node, "control_type", "") or "").lower()
-            role = (getattr(node, "role", "") or "").lower()
-            name = (getattr(node, "name", "") or "").strip().lower()
+            control_type = (_node_attr(node, "control_type", "") or "").lower()
+            role = (_node_attr(node, "role", "") or "").lower()
+            class_name = (_node_attr(node, "class_name", "") or "").lower()
+            name = (_node_attr(node, "name", "") or "").strip().lower()
+            if any(token in " ".join((control_type, role, class_name)) for token in ("document", "edit", "richedit", "text")):
+                return False
             if control_type in {"imagecontrol", "textcontrol", "panecontrol"} and not name:
                 return True
-            if role in {"image", "graphic", "separator", "static text"} and not getattr(node, "automation_id", None):
+            if role in {"image", "graphic", "separator", "static text"} and not _node_attr(node, "automation_id", None):
                 return True
             return False
 
-        def _is_leaf(node: Any, siblings: list[Any]) -> bool:
-            return all(getattr(sib, "bounding_box", None) is None or sib is node for sib in siblings)
-
-        def _score_node(node: Any, ancestry_depth: int, sibling_index: int, sibling_count: int, is_leaf: bool) -> dict[str, Any] | None:
-            box = getattr(node, "bounding_box", None)
-            if box is None:
+        def _score_node(node: Any, ancestry_depth: int, sibling_index: int, sibling_count: int) -> dict[str, Any] | None:
+            bounds = _node_bounds(node)
+            if bounds is None:
                 return None
-            left, top, right, bottom = box.left, box.top, box.right, box.bottom
+            left, top, right, bottom = bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]
             if not (left <= x <= right and top <= y <= bottom):
                 return None
 
@@ -245,17 +371,23 @@ class Executor:
             boundary_dy = min(abs(y - top), abs(y - bottom)) / height
             center_bias = max(0.0, 1.0 - min(px + py, 1.0))
             boundary_penalty = min(1.0, (boundary_dx + boundary_dy) / 2)
-            leaf_bonus = 0.10 if is_leaf else 0.0
-            interactive_bonus = 0.14 if (getattr(node, "name", None) or getattr(node, "automation_id", None) or getattr(node, "role", None)) else 0.0
+            has_children = bool(_node_attr(node, "children", None))
+            leaf_bonus = 0.10 if not has_children else 0.0
+            interactive_bonus = 0.14 if (_node_attr(node, "name", None) or _node_attr(node, "automation_id", None) or _node_attr(node, "role", None)) else 0.0
             specificity_bonus = 0.0
-            if getattr(node, "name", None):
+            semantic_role = _semantic_role(node)
+            if _node_attr(node, "name", None):
                 specificity_bonus += 0.05
-            if getattr(node, "automation_id", None):
+            if _node_attr(node, "automation_id", None):
                 specificity_bonus += 0.10
-            if getattr(node, "class_name", None):
+            if _node_attr(node, "class_name", None):
                 specificity_bonus += 0.04
-            if getattr(node, "role", None):
+            if _node_attr(node, "role", None):
                 specificity_bonus += 0.04
+            if semantic_role == "document":
+                specificity_bonus += 0.10
+            elif semantic_role == "text_input":
+                specificity_bonus += 0.08
             if width <= 44 and height <= 44:
                 specificity_bonus += 0.05
             if area < 18_000:
@@ -283,18 +415,42 @@ class Executor:
                 "confidence": confidence,
                 "z_index": sibling_index,
                 "ancestry_depth": ancestry_depth,
-                "bounds": {"left": left, "top": top, "right": right, "bottom": bottom},
             }
 
-        def _collect_nodes(state: Any) -> list[Any]:
-            return list(getattr(state, "interactive_nodes", []) or [])
+        def _iter_candidate_entries(state: Any) -> list[tuple[Any, int, int, int]]:
+            entries: list[tuple[Any, int, int, int]] = []
+            seen: set[int] = set()
 
-        def _best_from_nodes(nodes: list[Any]) -> dict[str, Any] | None:
-            if not nodes:
+            def _collect_group(nodes: list[Any], depth: int) -> None:
+                sibling_count = len(nodes)
+                for index, node in enumerate(nodes):
+                    if node is None:
+                        continue
+                    identity = id(node)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    entries.append((node, depth, index, sibling_count))
+                    children = _node_attr(node, "children", None)
+                    if children:
+                        _collect_group(list(children), depth + 1)
+
+            groups = []
+            for attr_name in ("interactive_nodes", "tree_nodes", "nodes", "children"):
+                group = getattr(state, attr_name, None)
+                if group:
+                    groups.append(list(group))
+            for group in groups:
+                _collect_group(group, depth=0)
+            return entries
+
+        def _best_from_nodes(state: Any) -> dict[str, Any] | None:
+            entries = _iter_candidate_entries(state)
+            if not entries:
                 return None
             scored: list[tuple[float, int, dict[str, Any]]] = []
-            for idx, node in enumerate(nodes):
-                candidate = _score_node(node, ancestry_depth=0, sibling_index=idx, sibling_count=len(nodes), is_leaf=True)
+            for node, depth, idx, sibling_count in entries:
+                candidate = _score_node(node, ancestry_depth=depth, sibling_index=idx, sibling_count=sibling_count)
                 if candidate is None:
                     continue
                 scored.append((candidate["confidence"], -idx, candidate))
@@ -303,31 +459,27 @@ class Executor:
             scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
             return scored[0][2]
 
-        def _best_from_hierarchy(state: Any) -> dict[str, Any] | None:
-            tree_nodes = _collect_nodes(state)
-            if not tree_nodes:
+        def _control_fallback(control: Any, source: str) -> dict[str, Any] | None:
+            snapshot = self._serialize_control(control)
+            if snapshot is None or not self._point_within_bounds(x, y, snapshot.get("bounds")):
                 return None
-
-            scored: list[tuple[float, int, dict[str, Any]]] = []
-            for idx, node in enumerate(tree_nodes):
-                box = getattr(node, "bounding_box", None)
-                if box is None:
-                    continue
-                if not (box.left <= x <= box.right and box.top <= y <= box.bottom):
-                    continue
-                candidate = _score_node(
-                    node,
-                    ancestry_depth=1 if getattr(node, "window_title", None) else 0,
-                    sibling_index=idx,
-                    sibling_count=len(tree_nodes),
-                    is_leaf=True,
-                )
-                if candidate is not None:
-                    scored.append((candidate["confidence"], -idx, candidate))
-            if not scored:
-                return None
-            scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-            return scored[0][2]
+            element = {
+                "type": snapshot.get("control_type") or "unknown",
+                "name": snapshot.get("name"),
+                "automation_id": snapshot.get("automation_id"),
+                "class_name": snapshot.get("class_name"),
+                "role": snapshot.get("role"),
+                "process_id": snapshot.get("process_id"),
+                "window_title": snapshot.get("window_title"),
+                "semantic_role": _semantic_role(snapshot),
+                "bounds": snapshot.get("bounds"),
+                "found": True,
+                "confidence": 0.42 if source == "focused_control" else 0.34,
+                "z_index": 0,
+                "ancestry_depth": 0,
+                "source": source,
+            }
+            return element
 
         tree_state = getattr(backend, "get_tree_state", None)
         if callable(tree_state):
@@ -336,60 +488,25 @@ class Executor:
             except Exception:
                 state = None
             if state is not None:
-                best = _best_from_hierarchy(state)
+                best = _best_from_nodes(state)
                 if best is not None:
                     best["source"] = "tree_state"
                     return best
 
-        snapshot = getattr(backend, "get_state", None)
-        if callable(snapshot):
-            try:
-                state = snapshot(use_vision=False, as_bytes=False)
-            except TypeError:
-                try:
-                    state = snapshot()
-                except Exception:
-                    state = None
-            except Exception:
-                state = None
-            if state is not None:
-                tree_state_obj = getattr(state, "tree_state", None)
-                best = _best_from_nodes(_collect_nodes(tree_state_obj))
+        state = self._safe_backend_state()
+        if state is not None:
+            tree_state_obj = getattr(state, "tree_state", None)
+            if tree_state_obj is not None:
+                best = _best_from_nodes(tree_state_obj)
                 if best is not None:
                     best["source"] = "snapshot"
                     return best
-
-        return {"type": "unknown", "name": None, "found": False, "confidence": 0.0}
-
-        tree_state = getattr(backend, "get_tree_state", None)
-        if callable(tree_state):
-            try:
-                state = tree_state()
-            except Exception:
-                state = None
-            if state is not None:
-                best = _best_from_nodes(list(getattr(state, "interactive_nodes", []) or []))
-                if best is not None:
-                    best["source"] = "tree_state"
-                    return best
-
-        snapshot = getattr(backend, "get_state", None)
-        if callable(snapshot):
-            try:
-                state = snapshot(use_vision=False, as_bytes=False)
-            except TypeError:
-                try:
-                    state = snapshot()
-                except Exception:
-                    state = None
-            except Exception:
-                state = None
-            if state is not None:
-                tree_state_obj = getattr(state, "tree_state", None)
-                best = _best_from_nodes(list(getattr(tree_state_obj, "interactive_nodes", []) or []))
-                if best is not None:
-                    best["source"] = "snapshot"
-                    return best
+            focused_fallback = _control_fallback(getattr(state, "focused_control", None), "focused_control")
+            if focused_fallback is not None:
+                return focused_fallback
+            active_fallback = _control_fallback(getattr(state, "active_window", None), "active_window")
+            if active_fallback is not None:
+                return active_fallback
 
         return {"type": "unknown", "name": None, "found": False, "confidence": 0.0}
 
@@ -406,23 +523,34 @@ class Executor:
         raise ExecutorError("Backend does not expose click().")
 
     def move(self, x: int, y: int) -> InputResult:
+        payload = {"x": x, "y": y, "element": self._hit_test_element(x, y)}
         if self._backend is None:
-            return self._result("move", f"moved:{x},{y}", tool="input_move")
+            return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
 
         if hasattr(self._backend, "move"):
             self._backend.move((x, y))
-            return self._result("move", f"moved:{x},{y}", tool="input_move")
+            return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
 
         raise ExecutorError("Backend does not expose move().")
 
     def drag(self, start: tuple[int, int], end: tuple[int, int]) -> InputResult:
+        before_context = self._input_context_snapshot()
+        payload = {
+            "start": {"x": start[0], "y": start[1], "element": self._hit_test_element(start[0], start[1])},
+            "end": {"x": end[0], "y": end[1], "element": self._hit_test_element(end[0], end[1])},
+            "active_window_before": before_context["active_window"],
+            "focused_control_before": before_context["focused_control"],
+        }
         if self._backend is None:
-            return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", tool="input_drag")
+            return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", payload=payload, tool="input_drag")
 
         if hasattr(self._backend, "move") and hasattr(self._backend, "drag"):
             self._backend.move(start)
             self._backend.drag(end)
-            return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", tool="input_drag")
+            after_context = self._input_context_snapshot()
+            payload["active_window_after"] = after_context["active_window"]
+            payload["focused_control_after"] = after_context["focused_control"]
+            return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", payload=payload, tool="input_drag")
 
         raise ExecutorError("Backend does not expose drag support.")
 
@@ -514,32 +642,55 @@ class Executor:
         raise ExecutorError("Backend does not expose type().")
 
     def multi_select(self, coordinates: list[tuple[int, int]], press_ctrl: bool = False) -> InputResult:
+        before_context = self._input_context_snapshot()
+        items = [{"x": x, "y": y, "element": self._hit_test_element(x, y)} for x, y in coordinates]
+        payload = {
+            "count": len(coordinates),
+            "press_ctrl": press_ctrl,
+            "targets": items,
+            "active_window_before": before_context["active_window"],
+            "focused_control_before": before_context["focused_control"],
+        }
         if self._backend is None:
             return self._result(
                 "multi_select",
                 f"multi_selected:{len(coordinates)}:{'ctrl' if press_ctrl else 'plain'}",
-                payload={"count": len(coordinates), "press_ctrl": press_ctrl},
+                payload=payload,
                 tool="input_multi_select",
             )
 
         if hasattr(self._backend, "multi_select"):
             self._backend.multi_select(press_ctrl=press_ctrl, locs=coordinates)
+            after_context = self._input_context_snapshot()
+            payload["active_window_after"] = after_context["active_window"]
+            payload["focused_control_after"] = after_context["focused_control"]
             return self._result(
                 "multi_select",
                 f"multi_selected:{len(coordinates)}:{'ctrl' if press_ctrl else 'plain'}",
-                payload={"count": len(coordinates), "press_ctrl": press_ctrl},
+                payload=payload,
                 tool="input_multi_select",
             )
 
         raise ExecutorError("Backend does not expose multi_select().")
 
     def multi_edit(self, edits: list[tuple[int, int, str]]) -> InputResult:
+        before_context = self._input_context_snapshot()
+        items = [{"x": x, "y": y, "text": text, "element": self._hit_test_element(x, y)} for x, y, text in edits]
+        payload = {
+            "count": len(edits),
+            "items": items,
+            "active_window_before": before_context["active_window"],
+            "focused_control_before": before_context["focused_control"],
+        }
         if self._backend is None:
-            return self._result("multi_edit", f"multi_edited:{len(edits)}", payload={"count": len(edits)}, tool="input_multi_edit")
+            return self._result("multi_edit", f"multi_edited:{len(edits)}", payload=payload, tool="input_multi_edit")
 
         if hasattr(self._backend, "multi_edit"):
             self._backend.multi_edit(edits)
-            return self._result("multi_edit", f"multi_edited:{len(edits)}", payload={"count": len(edits)}, tool="input_multi_edit")
+            after_context = self._input_context_snapshot()
+            payload["active_window_after"] = after_context["active_window"]
+            payload["focused_control_after"] = after_context["focused_control"]
+            return self._result("multi_edit", f"multi_edited:{len(edits)}", payload=payload, tool="input_multi_edit")
 
         raise ExecutorError("Backend does not expose multi_edit().")
 
@@ -554,7 +705,7 @@ class Executor:
                     "focus_before": None,
                     "focus_after": None,
                     "focus_changed": None,
-                    "injection_result": {"status": "sent", "method": "synthetic"},
+                    "injection_result": {"status": "sent", "method": "backend.shortcut.synthetic"},
                 },
                 tool="input_shortcut",
             )
@@ -601,12 +752,22 @@ class Executor:
         raise ExecutorError("Backend does not expose shortcut().")
 
     def scroll(self, direction: str, amount: int = 1) -> InputResult:
+        before_context = self._input_context_snapshot()
+        payload = {
+            "direction": direction,
+            "amount": amount,
+            "target_window_before": before_context["active_window"],
+            "target_control_before": before_context["focused_control"],
+        }
         if self._backend is None:
-            return self._result("scroll", f"scrolled:{direction}:{amount}", tool="input_scroll")
+            return self._result("scroll", f"scrolled:{direction}:{amount}", payload=payload, tool="input_scroll")
 
         if hasattr(self._backend, "scroll"):
             self._backend.scroll(direction=direction, wheel_times=amount)
-            return self._result("scroll", f"scrolled:{direction}:{amount}", tool="input_scroll")
+            after_context = self._input_context_snapshot()
+            payload["target_window_after"] = after_context["active_window"]
+            payload["target_control_after"] = after_context["focused_control"]
+            return self._result("scroll", f"scrolled:{direction}:{amount}", payload=payload, tool="input_scroll")
 
         raise ExecutorError("Backend does not expose scroll().")
 
@@ -746,6 +907,22 @@ class Executor:
             except Exception:
                 after_state = None
 
+            before_matching_windows = [
+                self._window_to_snapshot(window)
+                for window in (before_state or [])
+                if _matches_expected(getattr(window, "name", None) or getattr(window, "window_title", None))
+            ]
+            before_matching_windows = [window for window in before_matching_windows if window is not None]
+            after_matching_windows = [
+                self._window_to_snapshot(window)
+                for window in (after_state or [])
+                if _matches_expected(getattr(window, "name", None) or getattr(window, "window_title", None))
+            ]
+            after_matching_windows = [window for window in after_matching_windows if window is not None]
+            before_handles = {window.get("handle") for window in before_matching_windows if window.get("handle") is not None}
+            new_matching_windows = [window for window in after_matching_windows if window.get("handle") not in before_handles]
+            new_instance_detected = bool(new_matching_windows or len(after_matching_windows) > len(before_matching_windows))
+
             backend_verification_matches = _matches_expected(verification_hint)
             target_matches = _matches_expected(detected_name) or backend_verification_matches
             mismatch_signals = [
@@ -791,6 +968,11 @@ class Executor:
                 "pid": pid,
                 "before_window_count": len(before_state) if isinstance(before_state, list) else None,
                 "after_window_count": len(after_state) if isinstance(after_state, list) else None,
+                "matching_instance_count_before": len(before_matching_windows),
+                "matching_instance_count_after": len(after_matching_windows),
+                "new_instance_detected": new_instance_detected,
+                "new_instance_handles": [window.get("handle") for window in new_matching_windows if window.get("handle") is not None],
+                "new_instance_pids": [window.get("pid") for window in new_matching_windows if window.get("pid") is not None],
                 "window_detected": detected,
                 "detected_window_name": detected_name,
                 "verification_source": verification_source,
@@ -1571,16 +1753,6 @@ class Executor:
                         after = observed_target
                         verified = True
                         verification_mode = "already_maximized"
-                        break
-                    if (
-                        observed_target is not None
-                        and observed_active is not None
-                        and self._window_same_target(observed_target, observed_active)
-                        and "maximiz" in detail.casefold()
-                    ):
-                        after = observed_target
-                        verified = True
-                        verification_mode = "backend_ack_active_target"
                         break
                     if before_area and after_area and after_area > int(before_area * 1.15):
                         after = observed_target

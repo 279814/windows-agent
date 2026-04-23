@@ -28,6 +28,26 @@ TOOL_GROUP_TITLES = {
 
 TODO_PLACEHOLDER_TOOLS = ("ocr_extract", "ui_match", "vision_capture", "vision_locate")
 
+RESOURCE_DESCRIPTIONS: dict[str, str] = {
+    "desktop-agent-dev://manifest": "Machine-readable MCP manifest covering resource links, verification semantics, window handle/pid targeting, multi-source verification rules, and TODO placeholders.",
+    "desktop-agent-dev://readme": "Project overview and operator guidance for desktop observation, input, window control, and task orchestration, with verification semantics and TODO placeholders.",
+    "desktop-agent-dev://catalog": "Grouped tool catalog with normalized metadata, implementation status, verification semantics, targeting notes, examples, and TODO placeholders.",
+    "desktop-agent-dev://capabilities": "Capability matrix, client hints, risk posture, verification affordances, and explicit TODO placeholder status.",
+    "desktop-agent-dev://security": "Permission model and high-risk action policy, including verification-oriented operating guidance and placeholder caveats.",
+    "desktop-agent-dev://tool-handbook": "Client-readable handbook that explains tool usage, verification semantics, handle/pid target selection, payload expectations, and TODO placeholders.",
+    "desktop-agent-dev://tool-index": "Normalized tool index for MCP clients with implementation status, verification semantics, targeting semantics, result semantics, and TODO placeholders.",
+}
+
+RESOURCE_TITLES: dict[str, str] = {
+    "desktop-agent-dev://manifest": "Manifest",
+    "desktop-agent-dev://readme": "README",
+    "desktop-agent-dev://catalog": "Catalog",
+    "desktop-agent-dev://capabilities": "Capabilities",
+    "desktop-agent-dev://security": "Security",
+    "desktop-agent-dev://tool-handbook": "Tool Handbook",
+    "desktop-agent-dev://tool-index": "Tool Index",
+}
+
 
 @dataclass(slots=True)
 class ToolSpec:
@@ -58,15 +78,51 @@ class ToolRegistry:
         return self.specs[name]
 
     def resource_index(self) -> list[dict[str, str]]:
+        ordered_uris = (
+            "desktop-agent-dev://manifest",
+            "desktop-agent-dev://readme",
+            "desktop-agent-dev://catalog",
+            "desktop-agent-dev://capabilities",
+            "desktop-agent-dev://security",
+            "desktop-agent-dev://tool-handbook",
+            "desktop-agent-dev://tool-index",
+        )
         return [
-            {"uri": "desktop-agent-dev://readme", "title": "README", "description": "Project overview and usage guidance."},
-            {"uri": "desktop-agent-dev://catalog", "title": "Catalog", "description": "Grouped tool directory with implementation status, verification semantics, examples, and TODO markers."},
-            {"uri": "desktop-agent-dev://capabilities", "title": "Capabilities", "description": "Capability matrix, client hints, high-risk operations, and placeholder/TODO status."},
-            {"uri": "desktop-agent-dev://security", "title": "Security", "description": "Permission model and risk policy."},
-            {"uri": "desktop-agent-dev://manifest", "title": "Manifest", "description": "MCP document manifest with resource links, risk markers, and verification semantics."},
-            {"uri": "desktop-agent-dev://tool-handbook", "title": "Tool Handbook", "description": "Formal directory for MCP clients and agents, including verification guidance and placeholder caveats."},
-            {"uri": "desktop-agent-dev://tool-index", "title": "Tool Index", "description": "Normalized tool metadata for clients with implementation status, verification semantics, result semantics, and TODO placeholders."},
+            {
+                "uri": uri,
+                "title": RESOURCE_TITLES[uri],
+                "description": RESOURCE_DESCRIPTIONS[uri],
+            }
+            for uri in ordered_uris
         ]
+
+    def _tool_verification_semantics(self, spec: ToolSpec) -> str:
+        if spec.name in TODO_PLACEHOLDER_TOOLS:
+            return "TODO placeholder only. The tool intentionally returns a not_implemented-shaped response and should be routed to fallback logic until the capability lands."
+        if spec.kind == "window":
+            return "Top-level ok reflects the verified desktop outcome, not only backend success. Prefer handle or pid selectors when available, and inspect verified, matched_by, before_handle, after_handle, verification_mode, backend_response_detail, and backend_response_code."
+        if spec.name == "input_type":
+            return "Validation is explicit: inspect focused_control and validation.before/after fields to confirm the intended control changed."
+        if spec.name == "input_shortcut":
+            return "Verification is contextual: inspect target_window, focus_before, focus_after, focus_changed, and injection_result to confirm the shortcut landed in the intended foreground context."
+        if spec.name == "input_click":
+            return "Payload may include hit-test element metadata when the desktop backend can resolve the clicked surface. Treat missing or weak element metadata as partial verification and pair with desktop_snapshot when precision matters."
+        if spec.name in {"input_move", "input_drag", "input_scroll", "input_multi_edit", "input_multi_select"}:
+            return "The action result confirms dispatch. Payload richness currently varies by executor, so pair with desktop_snapshot or downstream state checks when you need post-action verification."
+        if spec.kind == "snapshot":
+            return "Read-only observations are already normalized for clients. Prefer active_window, windows, focused_control, and screenshot metadata when verifying state."
+        if spec.kind == "task":
+            return "Task tools return planner state rather than desktop-side effects. Verify progress through task_id, step_index, observations, and status."
+        return "Use the normalized payload fields together with backend-specific detail fields when present."
+
+    def _tool_targeting_semantics(self, spec: ToolSpec) -> str | None:
+        properties = (spec.params_schema or {}).get("properties") or {}
+        if {"name", "handle", "pid"}.issubset(properties):
+            return "Target selection precedence is handle > pid > name. Prefer handle for duplicate titles and pid for process-level disambiguation."
+        return None
+
+    def _tool_implementation_status(self, spec: ToolSpec) -> str:
+        return "todo_placeholder" if spec.name in TODO_PLACEHOLDER_TOOLS else "implemented"
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -78,7 +134,7 @@ class ToolRegistry:
             "capabilities": self.capabilities(),
             "policy": self.policy(),
             "examples": self.examples(),
-            "summary": "Windows-compatible desktop agent tools for observation, input, window control, and task planning, with explicit verification semantics and TODO placeholders.",
+            "summary": "Windows desktop agent tool metadata for observation, input, window control, and task orchestration, with explicit verification semantics, handle/pid targeting guidance, multi-source window verification, and TODO placeholders.",
             "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
         }
 
@@ -99,6 +155,9 @@ class ToolRegistry:
                 "safety_notes": spec.safety_notes,
                 "implementation_notes": spec.implementation_notes,
                 "backend_method": spec.backend_method,
+                "implementation_status": self._tool_implementation_status(spec),
+                "verification_semantics": self._tool_verification_semantics(spec),
+                "targeting_semantics": self._tool_targeting_semantics(spec),
             }
             for spec in self.specs.values()
         ]
@@ -123,6 +182,9 @@ class ToolRegistry:
             "ocr_hooks": False,
             "vision_hooks": False,
             "supports_handshake_metadata": True,
+            "verification_semantics_documented": True,
+            "handle_pid_targeting_documented": True,
+            "window_multi_source_verification": True,
             "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
             "placeholder_tools_implemented": False,
         }
@@ -141,6 +203,8 @@ class ToolRegistry:
             "notes": [
                 "High-risk actions remain gated by the safety service.",
                 "Tool metadata is normalized for MCP client catalogs and handbooks.",
+                "Window tools support handle/pid-aware targeting and report verification-oriented payload fields for post-action auditing.",
+                "Several input tools are dispatch-confirming by design; pair them with desktop_snapshot when richer post-action verification is required.",
                 "TODO placeholder vision tools intentionally return not_implemented responses until their pipelines are built.",
             ],
         }

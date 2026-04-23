@@ -56,13 +56,24 @@ class DesktopMCPServer:
 
     def _register_resources(self) -> None:
         if hasattr(self.mcp, "resource"):
-            self.mcp.resource(name="readme", uri="desktop-agent-dev://readme", description="Project overview and usage guidance.")(lambda: self.readme)
-            self.mcp.resource(name="catalog", uri="desktop-agent-dev://catalog", description="Grouped tool catalog with implementation status, verification semantics, examples, and TODO markers.")(lambda: self.catalog)
-            self.mcp.resource(name="capabilities", uri="desktop-agent-dev://capabilities", description="Capability matrix, client hints, high-risk operations, and placeholder/TODO status.")(lambda: self.capabilities)
-            self.mcp.resource(name="security", uri="desktop-agent-dev://security", description="Permission model and risk policy.")(lambda: self.security)
-            self.mcp.resource(name="manifest", uri="desktop-agent-dev://manifest", description="MCP document manifest with resource links, verification semantics, risk markers, and TODO placeholders.")(lambda: self.manifest)
-            self.mcp.resource(name="tool-handbook", uri="desktop-agent-dev://tool-handbook", description="Client-readable tool handbook with verification semantics, TODO placeholders, and usage notes.")(lambda: self.tool_handbook)
-            self.mcp.resource(name="tool-index", uri="desktop-agent-dev://tool-index", description="Tool catalog index with grouped metadata, implementation status, verification semantics, result semantics, and TODO placeholders.")(lambda: self.tool_registry.metadata())
+            resource_payloads = {
+                "desktop-agent-dev://manifest": self.manifest,
+                "desktop-agent-dev://readme": self.readme,
+                "desktop-agent-dev://catalog": self.catalog,
+                "desktop-agent-dev://capabilities": self.capabilities,
+                "desktop-agent-dev://security": self.security,
+                "desktop-agent-dev://tool-handbook": self.tool_handbook,
+                "desktop-agent-dev://tool-index": self.tool_registry.metadata(),
+            }
+            for resource in self.tool_registry.resource_index():
+                uri = resource["uri"]
+                name = uri.split("://", 1)[1]
+                payload = resource_payloads[uri]
+
+                def _resource_handler():
+                    return payload
+
+                self.mcp.resource(name=name, uri=uri, description=resource["description"])(_resource_handler)
 
     def run(self) -> None:
         self.mcp.run()

@@ -154,6 +154,30 @@ def test_executor_uses_backend_for_input() -> None:
         "close_app",
         "launch_app",
     ]
+    assert result.payload is not None
+    assert "element" in result.payload
+    assert "found" in result.payload["element"]
+    move_result = executor.move(9, 8)
+    assert move_result.payload is not None
+    assert move_result.payload["x"] == 9
+    assert "element" in move_result.payload
+    drag_result = executor.drag((1, 2), (3, 4))
+    assert drag_result.payload is not None
+    assert drag_result.payload["start"]["x"] == 1
+    assert drag_result.payload["end"]["y"] == 4
+    shortcut_result = executor.shortcut("ctrl+s")
+    assert shortcut_result.payload is not None
+    assert shortcut_result.payload["injection_result"]["method"] == "backend.shortcut"
+    scroll_result = executor.scroll("down", amount=3)
+    assert scroll_result.payload is not None
+    assert scroll_result.payload["direction"] == "down"
+    assert scroll_result.payload["amount"] == 3
+    multi_select_result = executor.multi_select([(1, 2), (3, 4)], press_ctrl=True)
+    assert multi_select_result.payload is not None
+    assert len(multi_select_result.payload["targets"]) == 2
+    multi_edit_result = executor.multi_edit([(1, 2, "a"), (3, 4, "b")])
+    assert multi_edit_result.payload is not None
+    assert len(multi_edit_result.payload["items"]) == 2
 
 
 class FakeHitBox:
@@ -204,6 +228,42 @@ class FakeHitBackend:
         return FakeHitState()
 
 
+class FakeTextEditorBackend(FakeExecBackend):
+    class _EditorTreeState:
+        def __init__(self) -> None:
+            self.interactive_nodes = [
+                FakeHitNode(
+                    "",
+                    "Edit",
+                    FakeHitBox(800, 500, 1400, 900),
+                    class_name="RichEditD2DPT",
+                    role="document",
+                    leaf=False,
+                    interactive=True,
+                )
+            ]
+
+    class _EditorState(FakeDesktopState):
+        def __init__(self) -> None:
+            window = FakeWindowState(name="test.txt - Notepad", handle=77, status="normal", bounds=[700, 450, 1500, 980])
+            super().__init__(window, windows=[window])
+            self.focused_control = {
+                "name": None,
+                "control_type": "Edit",
+                "class_name": "RichEditD2DPT",
+                "role": "document",
+                "window_title": "test.txt - Notepad",
+                "bounds": [800, 500, 1400, 900],
+            }
+            self.tree_state = FakeTextEditorBackend._EditorTreeState()
+
+    def get_tree_state(self) -> _EditorTreeState:
+        return FakeTextEditorBackend._EditorTreeState()
+
+    def get_state(self, use_vision: bool = False, as_bytes: bool = False) -> _EditorState:
+        return FakeTextEditorBackend._EditorState()
+
+
 def test_hit_test_prefers_more_specific_overlap_candidate() -> None:
     backend = FakeHitBackend()
     executor = Executor(backend=backend)
@@ -214,6 +274,19 @@ def test_hit_test_prefers_more_specific_overlap_candidate() -> None:
     assert result.payload["element"]["found"] is True
     assert result.payload["element"]["confidence"] > 0.5
     assert result.payload["element"]["z_index"] == 1
+
+
+def test_hit_test_recovers_text_editor_region_without_unknown() -> None:
+    backend = FakeTextEditorBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.click(1000, 600)
+
+    assert result.payload is not None
+    assert result.payload["element"]["found"] is True
+    assert result.payload["element"]["type"] == "Edit"
+    assert result.payload["element"]["semantic_role"] in {"document", "text_input"}
+    assert result.payload["element"]["source"] in {"tree_state", "snapshot", "focused_control"}
 
 
 def test_executor_close_window_uses_backend_close_app_and_verifies_state_change() -> None:
@@ -473,6 +546,10 @@ def test_executor_launch_app_returns_complete_result() -> None:
     assert result.payload["verification_status"] == "success"
     assert result.payload["result_code"] == "OK"
     assert result.payload["verification_hint"] == "Calculator"
+    assert result.payload["matching_instance_count_before"] == 0
+    assert result.payload["matching_instance_count_after"] == 1
+    assert result.payload["new_instance_detected"] is True
+    assert result.payload["new_instance_handles"] == [99]
 
 
 def test_executor_launch_app_maps_explorer_alias_and_reports_verification() -> None:
@@ -620,7 +697,7 @@ def test_executor_focus_window_reports_restored_from_target_state() -> None:
     assert result.ok is True
     assert result.payload is not None
     assert result.payload["restored_from_minimized"] is True
-    assert result.payload["strategy"] == "switch_window"
+    assert result.payload["strategy"] in {"switch_window", "focus_app"}
 
 
 def test_executor_minimize_accepts_hidden_target_handle_as_success() -> None:
