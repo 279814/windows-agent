@@ -57,6 +57,13 @@ class OverlaySnapshotData(TypedDict, total=False):
     last_target: dict[str, int] | None
     last_error: str | None
     last_verified_at: str | None
+    display_id: str | None
+    scale_factor: float
+    monitor_bounds: list[dict[str, int]]
+    transition_state: str | None
+    transition_reason: str | None
+    interruption_state: str | None
+    window_state: str | None
 
 
 class MotionPlanRequest(TypedDict, total=False):

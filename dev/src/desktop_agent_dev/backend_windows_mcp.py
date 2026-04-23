@@ -98,11 +98,61 @@ def load_windows_mcp_desktop(source_root: str | Path) -> WindowsMcpBackend:
                     focused_control = getattr(state.tree_state, "focused_node", None) or getattr(state.tree_state, "focus_node", None) or getattr(state.tree_state, "focused_control", None)
                     if focused_control is not None:
                         setattr(state, "focused_control", focused_control)
+                if getattr(state, "display_id", None) is None:
+                    for attr in ("monitor_id", "screen_id", "display_index"):
+                        value = getattr(state, attr, None)
+                        if value is not None:
+                            setattr(state, "display_id", value)
+                            break
+                if getattr(state, "dpi_scale", None) is None:
+                    for attr in ("scale_factor", "dpi_scaling", "dpi_scale_factor"):
+                        value = getattr(state, attr, None)
+                        if value is not None:
+                            try:
+                                setattr(state, "dpi_scale", float(value))
+                            except Exception:
+                                setattr(state, "dpi_scale", value)
+                            break
+                if getattr(state, "monitor_bounds", None) is None:
+                    for attr in ("monitors", "displays", "screen_bounds"):
+                        value = getattr(state, attr, None)
+                        if value:
+                            setattr(state, "monitor_bounds", value)
+                            break
+                if getattr(state, "is_user_control_active", None) is None:
+                    control_flags = ["user_control_active", "manual_control_active", "operator_control_active", "user_taking_over"]
+                    for attr in control_flags:
+                        value = getattr(state, attr, None)
+                        if value is not None:
+                            setattr(state, "is_user_control_active", lambda value=value: bool(value))
+                            break
             except Exception:
                 pass
             return state
 
         desktop.get_state = get_state_with_focus
+
+    original_is_user_control_active = getattr(desktop, "is_user_control_active", None)
+    if not callable(original_is_user_control_active):
+        def is_user_control_active() -> bool:
+            try:
+                state = desktop.get_state() if callable(getattr(desktop, "get_state", None)) else None
+                if state is None:
+                    return False
+                for attr in ("is_user_control_active", "user_control_active", "manual_control_active", "operator_control_active", "user_taking_over"):
+                    value = getattr(state, attr, None)
+                    if callable(value):
+                        try:
+                            return bool(value())
+                        except Exception:
+                            continue
+                    if value is not None:
+                        return bool(value)
+            except Exception:
+                return False
+            return False
+
+        desktop.is_user_control_active = is_user_control_active
     return WindowsMcpBackend(desktop=desktop, source_path=service_path)
 
 

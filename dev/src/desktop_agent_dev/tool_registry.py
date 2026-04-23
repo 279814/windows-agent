@@ -105,11 +105,11 @@ class ToolRegistry:
         if spec.name in TODO_PLACEHOLDER_TOOLS:
             return "TODO placeholder only. The tool intentionally returns a not_implemented-shaped response and should be routed to fallback logic until the capability lands."
         if spec.kind == "window":
-            return "Top-level ok reflects the verified desktop outcome, not only backend success. Prefer handle or pid selectors when available, and inspect verified, matched_by, before_handle, after_handle, verification_mode, backend_response_detail, and backend_response_code."
+            return "Top-level ok reflects the verified desktop outcome, not only backend success. Prefer handle or pid selectors when available, and inspect verified, matched_by, before_handle, after_handle, verification_mode, backend_response_detail, backend_response_code, window_state, and interruption_state."
         if spec.name == "motion_preview":
             return "This tool is read-only planning. Verify the returned path, phase, overlay_state, and metadata to inspect the intended cursor trajectory before dispatching real motion or drag operations."
         if spec.name == "overlay_state":
-            return "This tool is read-only. Use visible, cursor_x, cursor_y, trail, and metadata to inspect the current virtual overlay status without mutating desktop state."
+            return "This tool is read-only. Use visible, cursor_x, cursor_y, display_id, scale_factor, monitor_bounds, trail, transition_state, interruption_state, window_state, and metadata to inspect the current virtual overlay status without mutating desktop state."
         if spec.name == "input_type":
             return "Validation is explicit: inspect focused_control and validation.before/after fields to confirm the intended control changed."
         if spec.name == "input_shortcut":
@@ -216,6 +216,9 @@ class ToolRegistry:
             "verification_semantics_documented": True,
             "handle_pid_targeting_documented": True,
             "window_multi_source_verification": True,
+            "display_context_metadata": True,
+            "window_lifecycle_state_exposed": True,
+            "interruption_state_exposed": True,
             "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
             "placeholder_tools_implemented": False,
         }
