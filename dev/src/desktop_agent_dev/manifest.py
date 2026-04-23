@@ -35,7 +35,7 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
     summary = "Windows desktop agent MCP server for observation, input, window control, and task orchestration."
     body = {
         "name": "desktop-agent-dev",
-        "version": "1.5",
+        "version": "1.6",
         "stage": "phase1",
         "tool_count": len(registry.specs),
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -47,11 +47,12 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
             "tool_index": "desktop-agent-dev://tool-index",
         },
         "guidance": [
-            "Read the catalog before invoking tools.",
+            "Read the catalog or tool-handbook before invoking tools.",
             "Use snapshot tools to observe state before acting.",
+            "Prefer handle-aware verification fields such as verified, before_handle, after_handle, and backend_response_code when auditing results.",
             "Treat ocr_extract/ui_match/vision_capture/vision_locate as TODO placeholders until implemented.",
         ],
-        "high_risk_actions": ["window_close", "launch_app"],
+        "high_risk_actions": ["window_close", "window_launch", "input_launch_app"],
         "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
     }
     chapter = _chapter("Desktop Agent Dev Workspace", summary, body)
@@ -63,7 +64,7 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
 def build_catalog(registry: ToolRegistry) -> dict[str, Any]:
     summary = "Grouped tool directory with metadata, examples, and implementation status."
     body = {
-        "version": "1.5",
+        "version": "1.6",
         "groups": registry.group_catalog(),
         "tools": registry.tool_catalog(),
         "examples": registry.examples(),
@@ -85,6 +86,7 @@ def build_capabilities(registry: ToolRegistry) -> dict[str, Any]:
             "tool_handbook_available": True,
             "parameter_help": True,
             "result_help": True,
+            "verification_fields_available": True,
             "placeholder_tools_require_fallback": True,
         },
         "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
@@ -100,10 +102,11 @@ def build_security(registry: ToolRegistry) -> dict[str, Any]:
     body = {
         "default_mode": "observe-first",
         "permission_model": "per-tool",
-        "high_risk_actions": ["window_close", "launch_app"],
+        "high_risk_actions": ["window_close", "window_launch", "input_launch_app"],
         "notes": [
             "High-risk actions are guarded by the safety gate.",
             "The server emits only read-only documentation resources and normalized tool metadata.",
+            "Placeholder vision tools are intentionally exposed as TODO/not-implemented so clients can branch to fallback strategies.",
         ],
         "policy": registry.policy(),
     }
@@ -117,7 +120,7 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
     return {
         "name": "tool-handbook",
         "title": "Desktop Agent Tool Handbook",
-        "summary": "Formal directory for MCP clients and agents, including placeholder caveats.",
+        "summary": "Formal directory for MCP clients and agents, including verification guidance and placeholder caveats.",
         "sections": [
             {"heading": "Overview", "resource": "desktop-agent-dev://readme", "summary": "Project overview and usage guidance."},
             {"heading": "Tool Catalog", "resource": "desktop-agent-dev://catalog", "summary": "Grouped tool directory with metadata and examples."},
@@ -138,12 +141,17 @@ def build_manifest(registry: ToolRegistry) -> dict[str, Any]:
     return {
         "name": "desktop-agent-dev",
         "title": "Desktop Agent Dev Workspace",
-        "version": "1.5",
+        "version": "1.6",
         "stage": "phase1",
-        "high_risk_actions": ["window_close", "launch_app"],
+        "high_risk_actions": ["window_close", "window_launch", "input_launch_app"],
         "close_semantics": {
             "preferred_backend": "close_app",
             "success_rule": "backend exit code is 0 or absent and detail does not start with Failed/Error",
+        },
+        "verification_semantics": {
+            "window_tools": "Prefer verified together with before_handle/after_handle and backend_response_code.",
+            "input_tools": "Use validation blocks when available; otherwise pair tools with desktop_snapshot.",
+            "placeholder_tools": "ocr_extract, ui_match, vision_capture, and vision_locate are TODO placeholders and intentionally return not_implemented.",
         },
         "resources": [
             {"uri": "desktop-agent-dev://readme", "title": "README"},

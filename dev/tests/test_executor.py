@@ -322,6 +322,26 @@ class FakeWindowLifecycleBackend(FakeExecBackend):
         return (f"Restored {name} window.", 0)
 
 
+class FakeSwitchFailureBackend(FakeExecBackend):
+    def switch_app(self, name: str) -> tuple[str, int]:
+        self.calls.append(("switch_app", (name,), {}))
+        return (f"Application {name} not found.", 1)
+
+
+class FakeDuplicateTitleMinimizeBackend(FakeExecBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        primary = FakeWindowState(name="计算器", handle=101, status="normal")
+        secondary = FakeWindowState(name="计算器", handle=202, status="maximized")
+        self._state = FakeDesktopState(primary, windows=[primary, secondary])
+
+    def minimize_app(self, name: str | None = None) -> tuple[str, int]:
+        self.calls.append(("minimize_app", (name,), {}))
+        secondary = next(window for window in self._state.windows if window.handle == 202)
+        self._state = FakeDesktopState(secondary, windows=[secondary])
+        return (f"{name} minimized.", 0)
+
+
 def test_executor_close_window_marks_backend_failure_as_not_ok() -> None:
     backend = FakeFailBackend()
     executor = Executor(backend=backend)
@@ -467,6 +487,32 @@ def test_executor_window_lifecycle_marks_unverified_state_as_failure() -> None:
     assert restore.ok is False
     assert restore.detail == "Restore verification failed for main."
     assert restore.payload["verified"] is False
+
+
+def test_executor_switch_window_marks_backend_not_found_as_failure() -> None:
+    backend = FakeSwitchFailureBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.switch_window("main")
+
+    assert result.ok is False
+    assert result.detail == "Application main not found."
+    assert result.payload["backend_response_code"] == 1
+    assert result.payload["verified"] is False
+
+
+def test_executor_minimize_accepts_hidden_target_handle_as_success() -> None:
+    backend = FakeDuplicateTitleMinimizeBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.minimize_window("计算器")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["verified"] is True
+    assert result.payload["verification_mode"] == "handle_hidden_after_minimize"
+    assert result.payload["target_handle_present_after"] is False
+    assert result.payload["active_window_after"]["handle"] == 202
 
 
 def test_executor_launch_app_prefers_desktop_shortcut_for_third_party_app(tmp_path, monkeypatch) -> None:

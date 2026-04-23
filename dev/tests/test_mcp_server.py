@@ -146,6 +146,19 @@ def test_input_launch_app_tool_aligns_top_level_ok_on_success() -> None:
     assert result["data"]["payload"]["verification_status"] == "success"
 
 
+def test_window_launch_tool_normalizes_action_name() -> None:
+    if create_server is None or Executor is None:
+        pytest.skip(f"mcp runtime unavailable in this environment: {MCP_IMPORT_ERROR}")
+    server = create_server()
+    server.services.executor = Executor(backend=_LaunchBackend("File Explorer"))
+
+    result = server.tool_registry.specs["window_launch"].executor(name="explorer")
+
+    assert result["ok"] is True
+    assert result["data"]["action"] == "window_launch"
+    assert result["data"]["payload"]["verification_status"] == "success"
+
+
 def test_input_launch_app_tool_aligns_top_level_ok_on_target_mismatch() -> None:
     if create_server is None or Executor is None:
         pytest.skip(f"mcp runtime unavailable in this environment: {MCP_IMPORT_ERROR}")
@@ -220,6 +233,31 @@ def test_placeholder_vision_tools_report_not_implemented() -> None:
         assert result["ok"] is False
         assert result["error"]["code"] == "not_implemented"
         assert result["data"]["implemented"] is False
+
+
+class _SwitchFailBackend:
+    def __init__(self) -> None:
+        self._state = _LaunchState(_LaunchWindow("Codex"), windows=[_LaunchWindow("Codex")])
+
+    def switch_app(self, name: str) -> tuple[str, int]:
+        return (f"Application {name} not found.", 1)
+
+    def get_state(self, use_vision: bool = False, as_bytes: bool = False) -> _LaunchState:
+        return self._state
+
+
+def test_window_switch_tool_propagates_failed_verification_to_top_level() -> None:
+    if create_server is None or Executor is None:
+        pytest.skip(f"mcp runtime unavailable in this environment: {MCP_IMPORT_ERROR}")
+    server = create_server()
+    server.services.executor = Executor(backend=_SwitchFailBackend())
+
+    result = server.tool_registry.specs["window_switch"].executor(name="记事本")
+
+    assert result["ok"] is False
+    assert result["data"]["ok"] is False
+    assert result["data"]["payload"]["backend_response_code"] == 1
+    assert result["data"]["payload"]["verified"] is False
 
 
 async def _mcp_smoke_chain() -> dict[str, object]:

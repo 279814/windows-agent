@@ -60,16 +60,17 @@ class ToolRegistry:
     def resource_index(self) -> list[dict[str, str]]:
         return [
             {"uri": "desktop-agent-dev://readme", "title": "README", "description": "Project overview and usage guidance."},
-            {"uri": "desktop-agent-dev://catalog", "title": "Catalog", "description": "Grouped tool directory with implementation status, examples, and TODO markers."},
-            {"uri": "desktop-agent-dev://capabilities", "title": "Capabilities", "description": "Capability matrix, client hints, and placeholder/TODO status."},
+            {"uri": "desktop-agent-dev://catalog", "title": "Catalog", "description": "Grouped tool directory with implementation status, verification semantics, examples, and TODO markers."},
+            {"uri": "desktop-agent-dev://capabilities", "title": "Capabilities", "description": "Capability matrix, client hints, high-risk operations, and placeholder/TODO status."},
             {"uri": "desktop-agent-dev://security", "title": "Security", "description": "Permission model and risk policy."},
-            {"uri": "desktop-agent-dev://tool-handbook", "title": "Tool Handbook", "description": "Formal directory for MCP clients and agents, including placeholder caveats."},
-            {"uri": "desktop-agent-dev://tool-index", "title": "Tool Index", "description": "Normalized tool metadata for clients with implementation status."},
+            {"uri": "desktop-agent-dev://manifest", "title": "Manifest", "description": "MCP document manifest with resource links, risk markers, and verification semantics."},
+            {"uri": "desktop-agent-dev://tool-handbook", "title": "Tool Handbook", "description": "Formal directory for MCP clients and agents, including verification guidance and placeholder caveats."},
+            {"uri": "desktop-agent-dev://tool-index", "title": "Tool Index", "description": "Normalized tool metadata for clients with implementation status and result semantics."},
         ]
 
     def metadata(self) -> dict[str, Any]:
         return {
-            "version": "1.5",
+            "version": "1.6",
             "stage": "phase1",
             "tool_catalog": self.tool_catalog(),
             "group_catalog": self.group_catalog(),
@@ -77,7 +78,7 @@ class ToolRegistry:
             "capabilities": self.capabilities(),
             "policy": self.policy(),
             "examples": self.examples(),
-            "summary": "Windows-compatible desktop agent tools for observation, input, window control, and task planning.",
+            "summary": "Windows-compatible desktop agent tools for observation, input, window control, and task planning, with explicit verification semantics and TODO placeholders.",
             "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
         }
 
@@ -136,10 +137,11 @@ class ToolRegistry:
                 "window": "medium",
                 "task": "low",
             },
-            "high_risk_actions": ["window_close", "launch_app"],
+            "high_risk_actions": ["window_close", "window_launch", "input_launch_app"],
             "notes": [
                 "High-risk actions remain gated by the safety service.",
                 "Tool metadata is normalized for MCP client catalogs and handbooks.",
+                "TODO placeholder vision tools intentionally return not_implemented responses until their pipelines are built.",
             ],
         }
 
