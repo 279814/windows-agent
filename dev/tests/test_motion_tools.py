@@ -59,3 +59,20 @@ def test_motion_preview_executor_returns_overlay_state() -> None:
     assert result["tool"] == "motion_preview"
     assert result["data"]["payload"]["overlay_state"]["cursor_x"] == 100
     assert result["data"]["payload"]["path"][-1]["x"] == 100
+
+
+def test_motion_preview_is_read_only_for_overlay_cursor() -> None:
+    from desktop_agent_dev.executor import Executor
+
+    executor = Executor(overlay_renderer=OverlayRenderer(), motion_scheduler=MotionScheduler())
+    executor._overlay_renderer.update_cursor(12, 34)
+
+    result = executor.motion_preview("move", (12, 34), (100, 120))
+
+    snapshot = executor._overlay_renderer.snapshot()
+
+    assert result["ok"] is True
+    assert result["overlay_state"]["cursor_x"] == 12
+    assert result["overlay_state"]["metadata"]["preview_only"] is True
+    assert snapshot.cursor_x == 12
+    assert snapshot.cursor_y == 34

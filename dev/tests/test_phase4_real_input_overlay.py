@@ -52,6 +52,18 @@ def test_click_updates_overlay_and_uses_backend() -> None:
     assert result.payload["overlay_state"]["cursor_x"] == 100
 
 
+def test_move_reaches_backend_without_unboundlocal_error() -> None:
+    backend = FakeBackend()
+    executor = Executor(backend=backend, overlay_renderer=OverlayRenderer())
+
+    result = executor.move(100, 200)
+
+    assert result.ok is True
+    assert ("move", (150, 300)) in backend.calls
+    assert result.payload["target_verification"]["ok"] is True
+    assert result.payload["overlay_state"]["persistent"] is True
+
+
 def test_focus_and_type_publish_overlay_state() -> None:
     executor = Executor(backend=FakeBackend(), overlay_renderer=OverlayRenderer())
 
@@ -63,3 +75,14 @@ def test_focus_and_type_publish_overlay_state() -> None:
     assert type_result.ok is True
     assert type_result.payload["overlay_state"]["last_action_kind"] == "type"
     assert type_result.payload["overlay_state"]["scale_factor"] == 1.5
+
+
+def test_drag_runs_with_normalized_coordinates() -> None:
+    backend = FakeBackend()
+    executor = Executor(backend=backend, overlay_renderer=OverlayRenderer())
+
+    result = executor.drag((10, 10), (100, 120))
+
+    assert result.ok is True
+    assert ("move", (15, 15)) in backend.calls
+    assert ("drag", (150, 180)) in backend.calls

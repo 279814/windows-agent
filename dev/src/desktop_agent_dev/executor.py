@@ -39,6 +39,13 @@ class Executor:
         self._motion_scheduler = motion_scheduler or MotionScheduler()
         self._overlay_renderer = overlay_renderer or OverlayRenderer()
         self._task_store = task_store or TaskStore()
+        self._overlay_renderer.set_style(
+            cursor_color="#ff0000",
+            user_cursor_color="#3b82f6",
+            cursor_size=28,
+            user_cursor_size=14,
+            persistent=True,
+        )
 
     def _result(self, action: str, detail: str, ok: bool = True, payload: dict[str, Any] | None = None, tool: str | None = None) -> InputResult:
         return InputResult(action=action, ok=ok, detail=detail, payload=payload, tool=tool or action)
@@ -51,6 +58,9 @@ class Executor:
             "cursor_y": overlay_snapshot.cursor_y,
             "cursor_color": overlay_snapshot.cursor_color,
             "user_cursor_color": overlay_snapshot.user_cursor_color,
+            "cursor_size": overlay_snapshot.cursor_size,
+            "user_cursor_size": overlay_snapshot.user_cursor_size,
+            "persistent": overlay_snapshot.persistent,
             "trail": [list(point) for point in overlay_snapshot.trail],
             "click_ripples": [dict(ripple) for ripple in overlay_snapshot.click_ripples],
             "drag_active": overlay_snapshot.drag_active,
@@ -96,7 +106,7 @@ class Executor:
             if interruption_state is not None:
                 self._overlay_renderer.set_interruption_state(interruption_state)
             if window_state is not None:
-                self._overlay_renderer.metadata["window_state"] = window_state
+                self._overlay_renderer.frame.metadata["window_state"] = window_state
         except Exception:
             pass
 
@@ -168,13 +178,11 @@ class Executor:
     def _task_motion_event(self, *, kind: str, phase: MotionPhase, action: MotionAction | None = None, error_message: str | None = None) -> dict[str, Any]:
         transition_state: OverlayTransitionState = "stable"
         transition_reason: str | None = None
-        if phase is MotionPhase.PREPARING:
+        if phase is MotionPhase.PLANNED:
             transition_state = "focus_preparing" if kind == "window_focus" else "idle"
-        elif phase is MotionPhase.RUNNING:
-            transition_state = "switching" if kind == "window_switch" else "stable"
-        elif phase is MotionPhase.TAIL:
-            transition_state = "switch_tail"
-        elif phase is MotionPhase.COMPLETED:
+        elif phase in {MotionPhase.ANIMATING, MotionPhase.EXECUTING, MotionPhase.VERIFYING}:
+            transition_state = "switching" if kind in {"window_switch", "drag"} else "stable"
+        elif phase is MotionPhase.VERIFIED:
             transition_state = "stable"
         elif phase is MotionPhase.CANCELLED:
             transition_state = "cancelled"
@@ -305,8 +313,6 @@ class Executor:
     ) -> dict[str, Any]:
         action = self._motion_scheduler.plan(kind=kind, start=start, end=end, duration_ms=duration_ms, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
         result = self._motion_scheduler.plan_result(action, steps=steps)
-        self._overlay_renderer.update_cursor(end[0], end[1])
-        self._overlay_renderer.attach_motion(result.phase.value, {"kind": kind, "steps": len(result.path), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "last_target": {"x": end[0], "y": end[1]}})
         self._update_task_state(task_id, action=self._task_motion_event(kind=kind, phase=result.phase, action=action), verified=False)
         overlay_snapshot = self._overlay_renderer.snapshot()
         return {
@@ -327,8 +333,19 @@ class Executor:
                 "visible": overlay_snapshot.visible,
                 "cursor_x": overlay_snapshot.cursor_x,
                 "cursor_y": overlay_snapshot.cursor_y,
+                "cursor_color": overlay_snapshot.cursor_color,
+                "user_cursor_color": overlay_snapshot.user_cursor_color,
+                "cursor_size": overlay_snapshot.cursor_size,
+                "user_cursor_size": overlay_snapshot.user_cursor_size,
+                "persistent": overlay_snapshot.persistent,
                 "trail": [list(point) for point in overlay_snapshot.trail],
-                "metadata": overlay_snapshot.metadata,
+                "metadata": {
+                    **overlay_snapshot.metadata,
+                    "preview_only": True,
+                    "preview_kind": kind,
+                    "preview_steps": len(result.path),
+                    "preview_target": {"x": end[0], "y": end[1]},
+                },
                 "last_action_kind": overlay_snapshot.last_action_kind,
                 "last_action_status": overlay_snapshot.last_action_status,
                 "last_target": overlay_snapshot.last_target,
@@ -999,33 +1016,33 @@ class Executor:
     def click(self, x: int, y: int, button: str = "left", clicks: int = 1, hover_ms: int = 80, jitter_px: int = 1) -> InputResult:
         def runner() -> InputResult:
             before_context = self._input_context_snapshot()
-            x, y = self._normalize_input_point((x, y), before_context)
-            element = self._hit_test_element(x, y)
-            hover_motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(x, y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2, context=before_context)
-            settle_motion = self._drive_motion(kind="move", start=(x, y), end=(x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1, context=before_context)
-            virtual_mouse = self._drive_motion(kind="click", start=(x, y), end=(x, y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0, context=before_context)
-            payload = {"x": x, "y": y, "button": button, "clicks": clicks, "element": element, "pre_click_hover": hover_motion, "pre_click_settle": settle_motion, **virtual_mouse}
+            normalized_x, normalized_y = self._normalize_input_point((x, y), before_context)
+            element = self._hit_test_element(normalized_x, normalized_y)
+            hover_motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(normalized_x, normalized_y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2, context=before_context)
+            settle_motion = self._drive_motion(kind="move", start=(normalized_x, normalized_y), end=(normalized_x, normalized_y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1, context=before_context)
+            virtual_mouse = self._drive_motion(kind="click", start=(normalized_x, normalized_y), end=(normalized_x, normalized_y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0, context=before_context)
+            payload = {"x": normalized_x, "y": normalized_y, "button": button, "clicks": clicks, "element": element, "pre_click_hover": hover_motion, "pre_click_settle": settle_motion, **virtual_mouse}
             self._overlay_renderer.show()
-            self._overlay_renderer.update_cursor(x, y)
-            self._overlay_renderer.draw_click_ripple(x, y, radius=max(16, 14 + clicks * 4))
+            self._overlay_renderer.update_cursor(normalized_x, normalized_y)
+            self._overlay_renderer.draw_click_ripple(normalized_x, normalized_y, radius=max(16, 14 + clicks * 4))
             if self._backend is None:
                 after_context = self._input_context_snapshot()
                 payload["target_verification"] = self._verify_click_target(before_context, after_context, element=element, button=button, clicks=clicks)
                 payload["overlay_state"] = self._overlay_snapshot_payload()
                 payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
-                return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_click")
+                return self._result("input_click", f"clicked:{normalized_x},{normalized_y}:{button}:{clicks}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_click")
 
             if hasattr(self._backend, "move"):
-                self._backend.move((x, y))
+                self._backend.move((normalized_x, normalized_y))
             if hasattr(self._backend, "click"):
-                self._overlay_renderer.record_timeline("click_down", {"at": datetime.now(timezone.utc).isoformat(), "kind": "click", "phase": "down", "x": x, "y": y, "button": button, "clicks": clicks})
-                self._backend.click((x, y), button=button, clicks=clicks)
-                self._overlay_renderer.record_timeline("click_up", {"at": datetime.now(timezone.utc).isoformat(), "kind": "click", "phase": "up", "x": x, "y": y, "button": button, "clicks": clicks})
+                self._overlay_renderer.record_timeline("click_down", {"at": datetime.now(timezone.utc).isoformat(), "kind": "click", "phase": "down", "x": normalized_x, "y": normalized_y, "button": button, "clicks": clicks})
+                self._backend.click((normalized_x, normalized_y), button=button, clicks=clicks)
+                self._overlay_renderer.record_timeline("click_up", {"at": datetime.now(timezone.utc).isoformat(), "kind": "click", "phase": "up", "x": normalized_x, "y": normalized_y, "button": button, "clicks": clicks})
                 after_context = self._input_context_snapshot()
                 payload["target_verification"] = self._verify_click_target(before_context, after_context, element=element, button=button, clicks=clicks)
                 payload["overlay_state"] = self._overlay_snapshot_payload()
                 payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
-                return self._result("input_click", f"clicked:{x},{y}:{button}:{clicks}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_click")
+                return self._result("input_click", f"clicked:{normalized_x},{normalized_y}:{button}:{clicks}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_click")
 
             raise ExecutorError("Backend does not expose click().")
 
@@ -1034,24 +1051,27 @@ class Executor:
     def move(self, x: int, y: int, steps: int = 8, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0) -> InputResult:
         def runner() -> InputResult:
             context = self._input_context_snapshot()
-            x, y = self._normalize_input_point((x, y), context)
-            motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(x, y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel, context=context)
-            payload = {"x": x, "y": y, "element": self._hit_test_element(x, y), **motion}
+            normalized_x, normalized_y = self._normalize_input_point((x, y), context)
+            motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(normalized_x, normalized_y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel, context=context)
+            payload = {"x": normalized_x, "y": normalized_y, "element": self._hit_test_element(normalized_x, normalized_y), **motion}
             self._overlay_renderer.show()
-            self._overlay_renderer.update_cursor(x, y)
-            self._overlay_renderer.attach_motion(motion.get("phase", "move"), {"kind": "move", "steps": len(motion.get("path", [])), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "last_target": {"x": x, "y": y}})
+            motion_payload = motion.get("motion", {})
+            motion_path = motion_payload.get("path", [])
+            motion_phase = motion_payload.get("phase", "move")
+            self._overlay_renderer.update_cursor(normalized_x, normalized_y)
+            self._overlay_renderer.attach_motion(motion_phase, {"kind": "move", "steps": len(motion_path), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "last_target": {"x": normalized_x, "y": normalized_y}})
             if self._backend is None:
                 payload["overlay_state"] = self._overlay_snapshot_payload()
                 payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
-                payload["target_verification"] = {"ok": True, "reason": "synthetic_backend"}
-                return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
+                payload["target_verification"] = {"ok": True, "reason": "synthetic_backend", "actual_x": normalized_x, "actual_y": normalized_y}
+                return self._result("move", f"moved:{normalized_x},{normalized_y}", payload=payload, tool="input_move")
 
             if hasattr(self._backend, "move"):
-                self._backend.move((x, y))
+                self._backend.move((normalized_x, normalized_y))
                 payload["overlay_state"] = self._overlay_snapshot_payload()
                 payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
-                payload["target_verification"] = {"ok": True, "reason": "cursor_reached"}
-                return self._result("move", f"moved:{x},{y}", payload=payload, tool="input_move")
+                payload["target_verification"] = {"ok": True, "reason": "cursor_reached", "actual_x": normalized_x, "actual_y": normalized_y}
+                return self._result("move", f"moved:{normalized_x},{normalized_y}", payload=payload, tool="input_move")
 
             raise ExecutorError("Backend does not expose move().")
 
@@ -1060,17 +1080,13 @@ class Executor:
     def drag(self, start: tuple[int, int], end: tuple[int, int], steps: int = 16, hover_ms: int = 120, jitter_px: int = 1, accel: float = 1.0, decel: float = 1.1) -> InputResult:
         def runner() -> InputResult:
             before_context = self._input_context_snapshot()
-            start = self._normalize_input_point(start, before_context)
-            end = self._normalize_input_point(end, before_context)
-            hover_motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=start, steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2, context=before_context)
-            virtual_mouse = self._drive_motion(kind="drag", start=start, end=end, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel, context=before_context)
-            if not verified and status in (None, 0):
-                self._overlay_renderer.set_interruption_state("focus_lost", reason="window verification degraded")
-            if not verified:
-                self._overlay_renderer.set_interruption_state("focus_lost", reason="restore verification failed")
+            normalized_start = self._normalize_input_point(start, before_context)
+            normalized_end = self._normalize_input_point(end, before_context)
+            hover_motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=normalized_start, steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2, context=before_context)
+            virtual_mouse = self._drive_motion(kind="drag", start=normalized_start, end=normalized_end, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel, context=before_context)
             payload = {
-                "start": {"x": start[0], "y": start[1], "element": self._hit_test_element(start[0], start[1])},
-                "end": {"x": end[0], "y": end[1], "element": self._hit_test_element(end[0], end[1])},
+                "start": {"x": normalized_start[0], "y": normalized_start[1], "element": self._hit_test_element(normalized_start[0], normalized_start[1])},
+                "end": {"x": normalized_end[0], "y": normalized_end[1], "element": self._hit_test_element(normalized_end[0], normalized_end[1])},
                 "active_window_before": before_context["active_window"],
                 "focused_control_before": before_context["focused_control"],
                 "pre_drag_hover": hover_motion,
@@ -1078,40 +1094,40 @@ class Executor:
             }
             self._overlay_renderer.show()
             self._overlay_renderer.set_transition_state("switching", reason="drag in progress")
-            self._overlay_renderer.record_timeline("drag_prepare", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "prepare", "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}, "pause_ms": 220})
+            self._overlay_renderer.record_timeline("drag_prepare", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "prepare", "start": {"x": normalized_start[0], "y": normalized_start[1]}, "end": {"x": normalized_end[0], "y": normalized_end[1]}, "pause_ms": 220})
             time.sleep(0.22)
-            self._overlay_renderer.set_drag_state(True, start={"x": start[0], "y": start[1]})
-            self._overlay_renderer.update_cursor(start[0], start[1])
+            self._overlay_renderer.set_drag_state(True, start={"x": normalized_start[0], "y": normalized_start[1]})
+            self._overlay_renderer.update_cursor(normalized_start[0], normalized_start[1])
             if self._backend is None:
-                self._overlay_renderer.update_cursor(end[0], end[1])
-                self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+                self._overlay_renderer.update_cursor(normalized_end[0], normalized_end[1])
+                self._overlay_renderer.set_drag_state(False, start={"x": normalized_start[0], "y": normalized_start[1]})
                 self._overlay_renderer.set_transition_state("stable", reason="drag completed")
-                payload["target_verification"] = self._verify_drag_target(before_context, before_context, start=start, end=end)
+                payload["target_verification"] = self._verify_drag_target(before_context, before_context, start=normalized_start, end=normalized_end)
                 payload["overlay_state"] = self._overlay_snapshot_payload()
                 payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
-                return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_drag")
+                return self._result("drag", f"dragged:{normalized_start[0]},{normalized_start[1]}->{normalized_end[0]},{normalized_end[1]}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_drag")
 
             if hasattr(self._backend, "move") and hasattr(self._backend, "drag"):
-                self._backend.move(start)
+                self._backend.move(normalized_start)
                 if hasattr(self._backend, "mouse_down"):
-                    self._backend.mouse_down(start)
-                self._overlay_renderer.record_timeline("drag_down", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "down", "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}})
-                self._backend.drag(end)
+                    self._backend.mouse_down(normalized_start)
+                self._overlay_renderer.record_timeline("drag_down", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "down", "start": {"x": normalized_start[0], "y": normalized_start[1]}, "end": {"x": normalized_end[0], "y": normalized_end[1]}})
+                self._backend.drag(normalized_end)
                 if hasattr(self._backend, "mouse_up"):
-                    self._backend.mouse_up(end)
-                self._overlay_renderer.record_timeline("drag_up", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "up", "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}})
+                    self._backend.mouse_up(normalized_end)
+                self._overlay_renderer.record_timeline("drag_up", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "up", "start": {"x": normalized_start[0], "y": normalized_start[1]}, "end": {"x": normalized_end[0], "y": normalized_end[1]}})
                 after_context = self._input_context_snapshot()
                 payload["active_window_after"] = after_context["active_window"]
                 payload["focused_control_after"] = after_context["focused_control"]
-                payload["target_verification"] = self._verify_drag_target(before_context, after_context, start=start, end=end)
-                self._overlay_renderer.update_cursor(end[0], end[1])
-                self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+                payload["target_verification"] = self._verify_drag_target(before_context, after_context, start=normalized_start, end=normalized_end)
+                self._overlay_renderer.update_cursor(normalized_end[0], normalized_end[1])
+                self._overlay_renderer.set_drag_state(False, start={"x": normalized_start[0], "y": normalized_start[1]})
                 self._overlay_renderer.set_transition_state("stable", reason="drag completed")
                 payload["overlay_state"] = self._overlay_snapshot_payload()
                 payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
-                return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_drag")
+                return self._result("drag", f"dragged:{normalized_start[0]},{normalized_start[1]}->{normalized_end[0]},{normalized_end[1]}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_drag")
 
-            self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+            self._overlay_renderer.set_drag_state(False, start={"x": normalized_start[0], "y": normalized_start[1]})
             self._overlay_renderer.set_transition_state("failed", reason="drag support missing")
             raise ExecutorError("Backend does not expose drag support.")
 
@@ -1983,6 +1999,7 @@ class Executor:
         self._overlay_renderer.show()
         self._overlay_renderer.set_interruption_state(None)
         self._overlay_renderer.set_transition_state("focus_preparing", reason="focus_window invoked")
+        active = self._snapshot_window(refresh=True)
         self._overlay_renderer.record_timeline("focus_prepare", {"at": datetime.now(timezone.utc).isoformat(), "kind": "window_focus", "phase": "prepare", "pause_ms": 220, "window_state": "restoring" if self._window_is_minimized(active) else "normal"})
         time.sleep(0.22)
         active = self._ensure_window_ready(name=name, handle=handle, pid=pid)

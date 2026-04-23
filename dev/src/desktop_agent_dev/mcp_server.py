@@ -14,6 +14,18 @@ from .planner import Planner
 from .safety import SafetyGate
 from .state import TaskStore
 from .tool_registry import register_tool_specs
+from .workflow import WorkflowCoordinator
+from .installer import InstallerService
+
+try:
+    from .vision import VisionService
+except Exception:  # pragma: no cover - phase2 module may not exist yet during incremental rollout
+    VisionService = None  # type: ignore[assignment]
+
+try:
+    from .recovery import RecoveryService
+except Exception:  # pragma: no cover - phase2 module may not exist yet during incremental rollout
+    RecoveryService = None  # type: ignore[assignment]
 
 
 @dataclass(slots=True)
@@ -23,6 +35,10 @@ class AppServices:
     planner: Planner
     safety: SafetyGate
     task_store: TaskStore | None = None
+    vision: object | None = None
+    recovery: object | None = None
+    workflow: WorkflowCoordinator | None = None
+    installer: InstallerService | None = None
 
 
 class DesktopMCPServer:
@@ -37,12 +53,17 @@ class DesktopMCPServer:
             except BackendLoadError:
                 self._backend_bundle = None
         backend = self._backend_bundle.desktop if self._backend_bundle else None
+        recovery = RecoveryService() if RecoveryService is not None else None
         self.services = AppServices(
             perception=Perception(backend=backend),
             executor=Executor(backend=backend),
             planner=Planner(),
             safety=SafetyGate(),
-            task_store=TaskStore(),
+            task_store=TaskStore(recovery_service=recovery),
+            vision=VisionService() if VisionService is not None else None,
+            recovery=recovery,
+            workflow=WorkflowCoordinator(),
+            installer=InstallerService(self._windows_mcp_root),
         )
         self.mcp = FastMCP("desktop-agent-dev")
         register_tool_specs(self)

@@ -28,7 +28,7 @@ TOOL_GROUP_TITLES = {
     "overlay": "Overlay Inspection",
 }
 
-TODO_PLACEHOLDER_TOOLS = ("ocr_extract", "ui_match", "vision_capture", "vision_locate")
+TODO_PLACEHOLDER_TOOLS: tuple[str, ...] = ()
 
 RESOURCE_DESCRIPTIONS: dict[str, str] = {
     "desktop-agent-dev://manifest": "Machine-readable MCP manifest covering resource links, verification semantics, window handle/pid targeting, multi-source verification rules, display/DPI context, UAC-aware window recovery, failure fallback hints, tool discoverability, and TODO placeholders.",
@@ -210,8 +210,8 @@ class ToolRegistry:
             "task": True,
             "motion": True,
             "overlay": True,
-            "ocr_hooks": False,
-            "vision_hooks": False,
+            "ocr_hooks": True,
+            "vision_hooks": True,
             "supports_handshake_metadata": True,
             "verification_semantics_documented": True,
             "handle_pid_targeting_documented": True,
@@ -220,7 +220,7 @@ class ToolRegistry:
             "window_lifecycle_state_exposed": True,
             "interruption_state_exposed": True,
             "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
-            "placeholder_tools_implemented": False,
+            "placeholder_tools_implemented": True,
         }
 
     def policy(self) -> dict[str, Any]:

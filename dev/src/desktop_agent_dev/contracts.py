@@ -50,6 +50,11 @@ class OverlaySnapshotData(TypedDict, total=False):
     visible: bool
     cursor_x: int
     cursor_y: int
+    cursor_color: str
+    user_cursor_color: str
+    cursor_size: int
+    user_cursor_size: int
+    persistent: bool
     trail: list[tuple[int, int]]
     metadata: dict[str, Any]
     last_action_kind: str | None

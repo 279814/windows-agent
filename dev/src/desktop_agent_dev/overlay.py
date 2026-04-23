@@ -6,11 +6,14 @@ from typing import Any
 
 @dataclass(slots=True)
 class OverlayFrame:
-    visible: bool = False
+    visible: bool = True
     cursor_x: int = 0
     cursor_y: int = 0
     cursor_color: str = "#ff0000"
     user_cursor_color: str = "#3b82f6"
+    cursor_size: int = 28
+    user_cursor_size: int = 14
+    persistent: bool = True
     trail: list[tuple[int, int]] = field(default_factory=list)
     click_ripples: list[dict[str, int]] = field(default_factory=list)
     drag_active: bool = False
@@ -35,12 +38,22 @@ class OverlayRenderer:
 
     def __init__(self) -> None:
         self.frame = OverlayFrame()
+        self.frame.metadata.update(
+            {
+                "cursor_color": self.frame.cursor_color,
+                "user_cursor_color": self.frame.user_cursor_color,
+                "cursor_size": self.frame.cursor_size,
+                "user_cursor_size": self.frame.user_cursor_size,
+                "persistent": self.frame.persistent,
+            }
+        )
 
     def show(self) -> None:
         self.frame.visible = True
 
     def hide(self) -> None:
-        self.frame.visible = False
+        if not self.frame.persistent:
+            self.frame.visible = False
 
     def set_display_context(self, *, display_id: str | None = None, scale_factor: float = 1.0, monitor_bounds: list[dict[str, int]] | None = None) -> None:
         self.frame.display_id = display_id
@@ -55,6 +68,37 @@ class OverlayRenderer:
         if len(self.frame.trail) > 128:
             self.frame.trail = self.frame.trail[-128:]
         self.frame.metadata.update({"cursor_x": x, "cursor_y": y, "cursor_color": self.frame.cursor_color, "user_cursor_color": self.frame.user_cursor_color})
+
+    def set_style(
+        self,
+        *,
+        cursor_color: str | None = None,
+        user_cursor_color: str | None = None,
+        cursor_size: int | None = None,
+        user_cursor_size: int | None = None,
+        persistent: bool | None = None,
+    ) -> None:
+        if cursor_color:
+            self.frame.cursor_color = str(cursor_color)
+        if user_cursor_color:
+            self.frame.user_cursor_color = str(user_cursor_color)
+        if cursor_size is not None:
+            self.frame.cursor_size = max(8, int(cursor_size))
+        if user_cursor_size is not None:
+            self.frame.user_cursor_size = max(4, int(user_cursor_size))
+        if persistent is not None:
+            self.frame.persistent = bool(persistent)
+            if self.frame.persistent:
+                self.frame.visible = True
+        self.frame.metadata.update(
+            {
+                "cursor_color": self.frame.cursor_color,
+                "user_cursor_color": self.frame.user_cursor_color,
+                "cursor_size": self.frame.cursor_size,
+                "user_cursor_size": self.frame.user_cursor_size,
+                "persistent": self.frame.persistent,
+            }
+        )
 
     def draw_click_ripple(self, x: int, y: int, radius: int = 18) -> None:
         self.frame.click_ripples.append({"x": x, "y": y, "radius": radius})
@@ -119,6 +163,11 @@ class OverlayRenderer:
             visible=self.frame.visible,
             cursor_x=self.frame.cursor_x,
             cursor_y=self.frame.cursor_y,
+            cursor_color=self.frame.cursor_color,
+            user_cursor_color=self.frame.user_cursor_color,
+            cursor_size=self.frame.cursor_size,
+            user_cursor_size=self.frame.user_cursor_size,
+            persistent=self.frame.persistent,
             trail=list(self.frame.trail),
             click_ripples=[dict(ripple) for ripple in self.frame.click_ripples],
             drag_active=self.frame.drag_active,
