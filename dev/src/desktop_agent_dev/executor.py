@@ -67,7 +67,7 @@ class Executor:
             "timeline": [dict(item) for item in overlay_snapshot.timeline],
         }
 
-    def _sync_overlay_from_context(self, *, active_window: dict[str, Any] | None = None, phase: str | None = None, kind: str | None = None, target: tuple[int, int] | None = None, drag_start: tuple[int, int] | None = None, drag_active: bool | None = None, pause_ms: int | None = None, highlight: bool = False, tail_ms: int | None = None, status: str | None = None) -> None:
+    def _sync_overlay_from_context(self, *, active_window: dict[str, Any] | None = None, phase: str | None = None, kind: str | None = None, target: tuple[int, int] | None = None, drag_start: tuple[int, int] | None = None, drag_active: bool | None = None, pause_ms: int | None = None, highlight: bool = False, tail_ms: int | None = None, status: OverlayTransitionState | None = None) -> None:
         try:
             display_id = None
             scale_factor = 1.0
@@ -147,9 +147,27 @@ class Executor:
         return result
 
     def _task_motion_event(self, *, kind: str, phase: MotionPhase, action: MotionAction | None = None, error_message: str | None = None) -> dict[str, Any]:
+        transition_state: OverlayTransitionState = "stable"
+        transition_reason: str | None = None
+        if phase is MotionPhase.PREPARING:
+            transition_state = "focus_preparing" if kind == "window_focus" else "idle"
+        elif phase is MotionPhase.RUNNING:
+            transition_state = "switching" if kind == "window_switch" else "stable"
+        elif phase is MotionPhase.TAIL:
+            transition_state = "switch_tail"
+        elif phase is MotionPhase.COMPLETED:
+            transition_state = "stable"
+        elif phase is MotionPhase.CANCELLED:
+            transition_state = "cancelled"
+            transition_reason = error_message or "cancelled"
+        elif phase is MotionPhase.FAILED:
+            transition_state = "failed"
+            transition_reason = error_message or "failed"
         payload: dict[str, Any] = {
             "kind": kind,
             "phase": phase.value,
+            "transition_state": transition_state,
+            "transition_reason": transition_reason,
             "last_error": error_message,
             "last_verified_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -974,12 +992,14 @@ class Executor:
                 **virtual_mouse,
             }
             self._overlay_renderer.show()
+            self._overlay_renderer.set_transition_state("switching", reason="drag in progress")
             self._overlay_renderer.record_timeline("drag_prepare", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "prepare", "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}})
             self._overlay_renderer.set_drag_state(True, start={"x": start[0], "y": start[1]})
             self._overlay_renderer.update_cursor(start[0], start[1])
             if self._backend is None:
                 self._overlay_renderer.update_cursor(end[0], end[1])
                 self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+                self._overlay_renderer.set_transition_state("stable", reason="drag completed")
                 payload["target_verification"] = self._verify_drag_target(before_context, before_context, start=start, end=end)
                 payload["overlay_state"] = self._overlay_snapshot_payload()
                 payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
@@ -1000,11 +1020,13 @@ class Executor:
                 payload["target_verification"] = self._verify_drag_target(before_context, after_context, start=start, end=end)
                 self._overlay_renderer.update_cursor(end[0], end[1])
                 self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+                self._overlay_renderer.set_transition_state("stable", reason="drag completed")
                 payload["overlay_state"] = self._overlay_snapshot_payload()
                 payload["execution_timeline"] = self._overlay_snapshot_payload().get("timeline", [])
                 return self._result("drag", f"dragged:{start[0]},{start[1]}->{end[0]},{end[1]}", ok=bool(payload["target_verification"].get("ok", True)), payload=payload, tool="input_drag")
 
             self._overlay_renderer.set_drag_state(False, start={"x": start[0], "y": start[1]})
+            self._overlay_renderer.set_transition_state("failed", reason="drag support missing")
             raise ExecutorError("Backend does not expose drag support.")
 
         return self._run_input_with_recovery(operation="drag", runner=runner)
@@ -1811,7 +1833,7 @@ class Executor:
             backend_response = response
             backend_response_detail = detail
             backend_response_code = status
-            self._sync_overlay_from_context(active_window=current or previous, phase="switch_commit", kind="window_switch", target=None, tail_ms=120, status="transition" if not verified else "stable")
+            self._sync_overlay_from_context(active_window=current or previous, phase="switch_commit", kind="window_switch", target=None, tail_ms=120, status="switch_tail" if verified else "failed")
             if verified and status not in (None, 0):
                 resolved_name = current.get("name") if current else None
                 result_detail = f"Switched to {resolved_name or target_label} window."
@@ -1842,6 +1864,8 @@ class Executor:
         raise ExecutorError("Backend does not expose switch_app().")
 
     def focus_window(self, name: str, handle: int | None = None, pid: int | None = None) -> InputResult:
+        self._overlay_renderer.show()
+        self._overlay_renderer.set_transition_state("focus_preparing", reason="focus_window invoked")
         active = self._ensure_window_ready(name=name, handle=handle, pid=pid)
         if self._backend is None:
             payload = self._window_payload(target_window=name, before={"name": name, "status": None, "handle": handle, "pid": pid}, after=active, verified=False)
@@ -1893,7 +1917,7 @@ class Executor:
                     or (target_pid is not None and active_after.get("pid") == target_pid)
                 )
             )
-            self._sync_overlay_from_context(active_window=current or active_after or previous, phase="focus_prepare", kind="window_focus", target=None, pause_ms=60 if verified else 0, highlight=True, status="transition")
+            self._sync_overlay_from_context(active_window=current or active_after or previous, phase="focus_prepare", kind="window_focus", target=None, pause_ms=60 if verified else 0, highlight=True, status="focus_highlight" if verified else "cancelled")
             result = self._result(
                 "window_focus",
                 detail,
