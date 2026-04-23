@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from mcp import ClientSession, StdioServerParameters, stdio_client
 
@@ -98,6 +99,26 @@ class _ProcessVerifiedLaunchBackend(_LaunchBackend):
         return (f"Launched via start menu shortcut: steam (score=90). 27236\r\n [attempted=direct:{name}; verification=process:steam.exe]", 0, 27236)
 
 
+class _TypeValidationBackend:
+    def __init__(self) -> None:
+        self._state = SimpleNamespace(
+            focused_control={"name": "七", "value": "", "text": "", "control_type": "按钮", "window_title": "计算器"}
+        )
+
+    def get_state(self, use_vision: bool = False, as_bytes: bool = False) -> SimpleNamespace:
+        return self._state
+
+    def type(
+        self,
+        loc: tuple[int, int],
+        text: str,
+        press_enter: bool = False,
+        clear: bool = False,
+        caret_position: str = "idle",
+    ) -> None:
+        return None
+
+
 def test_input_launch_app_tool_aligns_top_level_ok_on_success() -> None:
     server = create_server()
     server.services.executor = Executor(backend=_LaunchBackend("File Explorer"))
@@ -146,6 +167,33 @@ def test_input_launch_app_tool_accepts_backend_process_verification() -> None:
     assert result["data"]["payload"]["verification_source"] == "process"
     assert result["data"]["payload"]["verification_hint"] == "steam.exe"
     assert result["data"]["payload"]["verification_status"] == "success"
+
+
+def test_input_type_tool_propagates_failed_validation_to_top_level() -> None:
+    server = create_server()
+    server.services.executor = Executor(backend=_TypeValidationBackend())
+    server.services.perception = SimpleNamespace(
+        snapshot=lambda with_screenshot=False: SimpleNamespace(
+            focused_control={"name": "七", "value": "", "text": "", "control_type": "按钮", "window_title": "计算器"}
+        )
+    )
+
+    result = server.tool_registry.specs["input_type"].executor(text="23")
+
+    assert result["ok"] is False
+    assert result["message"] == "validation_failed:23"
+    assert result["data"]["ok"] is False
+    assert result["data"]["payload"]["validation"]["passed"] is False
+
+
+def test_placeholder_vision_tools_report_not_implemented() -> None:
+    server = create_server()
+
+    for tool_name in ("vision_capture", "ocr_extract", "vision_locate", "ui_match"):
+        result = server.tool_registry.specs[tool_name].executor()
+        assert result["ok"] is False
+        assert result["error"]["code"] == "not_implemented"
+        assert result["data"]["implemented"] is False
 
 
 async def _mcp_smoke_chain() -> dict[str, object]:

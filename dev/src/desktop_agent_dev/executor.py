@@ -634,9 +634,9 @@ class Executor:
 
             verification_aliases = {
                 "explorer.exe": ["explorer", "file explorer", "文件资源管理器"],
-                "calc.exe": ["calc", "calculator"],
-                "notepad.exe": ["notepad"],
-                "mspaint.exe": ["mspaint", "paint"],
+                "calc.exe": ["calc", "calculator", "计算器"],
+                "notepad.exe": ["notepad", "记事本"],
+                "mspaint.exe": ["mspaint", "paint", "画图"],
             }
             verification_blacklist = {
                 "calc.exe": {"mpicalc"},
@@ -1273,7 +1273,8 @@ class Executor:
             after = self._snapshot_window(name, refresh=True)
             verified = bool(after and str(after.get("status", "")).lower().endswith("minimized"))
             payload = {**self._window_payload(target_window=before.get("name") if before else name, before=before, after=after), "verified": verified}
-            return self._result("window_minimize", str(response), payload=payload, tool="window_minimize")
+            detail = str(response) if verified else f"Minimize verification failed for {before.get('name') if before else (name or 'active')}."
+            return self._result("window_minimize", detail, ok=verified, payload=payload, tool="window_minimize")
         raise ExecutorError("Backend does not expose minimize_app().")
 
     def maximize_window(self, name: str | None = None) -> InputResult:
@@ -1290,7 +1291,8 @@ class Executor:
             after = self._snapshot_window(name, refresh=True)
             verified = bool(after and str(after.get("status", "")).lower() == "maximized")
             payload = {**self._window_payload(target_window=before.get("name") if before else name, before=before, after=after), "verified": verified}
-            return self._result("window_maximize", str(response), payload=payload, tool="window_maximize")
+            detail = str(response) if verified else f"Maximize verification failed for {before.get('name') if before else (name or 'active')}."
+            return self._result("window_maximize", detail, ok=verified, payload=payload, tool="window_maximize")
         return self._result(
             "window_maximize",
             f"maximize:{name or 'active'}",
@@ -1318,7 +1320,8 @@ class Executor:
             after = self._snapshot_window(name, refresh=True)
             verified = bool(after and str(after.get("status", "")).lower() not in {"minimized", "maximized"})
             payload = {**self._window_payload(target_window=before.get("name") if before else name, before=before, after=after), "verified": verified}
-            return self._result("window_restore", str(response), payload=payload, tool="window_restore")
+            detail = str(response) if verified else f"Restore verification failed for {before.get('name') if before else (name or 'active')}."
+            return self._result("window_restore", detail, ok=verified, payload=payload, tool="window_restore")
         return self._result(
             "window_restore",
             f"restore:{name or 'active'}",

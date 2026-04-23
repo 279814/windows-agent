@@ -275,6 +275,39 @@ class FakeProcessVerifiedLaunchBackend(FakeExecBackend):
         return (f"Launched via start menu shortcut: steam (score=90). 27236\r\n [attempted=direct:{name}; verification=process:steam.exe]", 0, 27236)
 
 
+class FakeLocalizedCalcBackend(FakeExecBackend):
+    def launch_app(self, name: str) -> tuple[str, int, int]:
+        self.calls.append(("launch_app", (name,), {}))
+        localized_window = FakeWindowState(name="计算器", handle=103, status="normal")
+        current_windows = list(self._state.windows)
+        current_windows.append(localized_window)
+        self._state = FakeDesktopState(localized_window, windows=current_windows)
+        return (f"Launched {name}. [verification=name:{localized_window.name}]", 0, 4243)
+
+
+class FakeWindowLifecycleBackend(FakeExecBackend):
+    def __init__(self, maximize_status: str = "normal", minimize_status: str = "normal", restore_status: str = "maximized") -> None:
+        super().__init__()
+        self.maximize_status = maximize_status
+        self.minimize_status = minimize_status
+        self.restore_status = restore_status
+
+    def maximize_app(self, name: str | None = None) -> tuple[str, int]:
+        self.calls.append(("maximize_app", (name,), {}))
+        self._state.active_window.status = self.maximize_status
+        return (f"Maximized {name} window.", 0)
+
+    def minimize_app(self, name: str | None = None) -> tuple[str, int]:
+        self.calls.append(("minimize_app", (name,), {}))
+        self._state.active_window.status = self.minimize_status
+        return (f"Minimized {name} window.", 0)
+
+    def restore_app(self, name: str | None = None) -> tuple[str, int]:
+        self.calls.append(("restore_app", (name,), {}))
+        self._state.active_window.status = self.restore_status
+        return (f"Restored {name} window.", 0)
+
+
 def test_executor_close_window_marks_backend_failure_as_not_ok() -> None:
     backend = FakeFailBackend()
     executor = Executor(backend=backend)
@@ -327,6 +360,20 @@ def test_executor_launch_app_maps_explorer_alias_and_reports_verification() -> N
     assert result.payload["warning"] is None
     assert backend.calls[-1][0] == "launch_app"
     assert backend.calls[-1][1] == ("explorer.exe",)
+
+
+def test_executor_launch_app_accepts_localized_window_name_for_calc() -> None:
+    backend = FakeLocalizedCalcBackend()
+    executor = Executor(backend=backend)
+
+    result = executor.launch_app("calc")
+
+    assert result.ok is True
+    assert result.payload is not None
+    assert result.payload["matched_target"] == "calc.exe"
+    assert result.payload["detected_window_name"] == "计算器"
+    assert result.payload["target_matches"] is True
+    assert result.payload["verification_status"] == "success"
 
 
 def test_executor_launch_app_maps_notepad_and_mspaint_aliases() -> None:
@@ -385,6 +432,27 @@ def test_executor_launch_app_rejects_mpicalc_for_calc() -> None:
     assert result.payload["verification_status"] == "target_mismatch"
     assert result.payload["result_code"] == "TARGET_MISMATCH"
     assert backend.calls[-1][1] == ("calc.exe",)
+
+
+def test_executor_window_lifecycle_marks_unverified_state_as_failure() -> None:
+    backend = FakeWindowLifecycleBackend(maximize_status="normal", minimize_status="normal", restore_status="maximized")
+    executor = Executor(backend=backend)
+
+    maximize = executor.maximize_window("main")
+    minimize = executor.minimize_window("main")
+    restore = executor.restore_window("main")
+
+    assert maximize.ok is False
+    assert maximize.detail == "Maximize verification failed for main."
+    assert maximize.payload["verified"] is False
+
+    assert minimize.ok is False
+    assert minimize.detail == "Minimize verification failed for main."
+    assert minimize.payload["verified"] is False
+
+    assert restore.ok is False
+    assert restore.detail == "Restore verification failed for main."
+    assert restore.payload["verified"] is False
 
 
 def test_executor_launch_app_prefers_desktop_shortcut_for_third_party_app(tmp_path, monkeypatch) -> None:

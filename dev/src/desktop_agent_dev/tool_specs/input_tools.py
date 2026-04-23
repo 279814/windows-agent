@@ -65,6 +65,14 @@ INPUT_LAUNCH_APP_OUTPUT_EXAMPLES = [
 
 
 def register_input_tools(registry: ToolRegistry, services: Any) -> None:
+    def input_response(tool_name: str, action_name: str, result: Any, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return ToolResponse(
+            ok=result.ok,
+            tool=tool_name,
+            message="ok" if result.ok else result.detail,
+            data=input_payload(action_name, result.ok, result.detail, payload if payload is not None else result.payload),
+        ).as_dict()
+
     def input_click(x: int, y: int, button: str = "left", clicks: int = 1) -> dict[str, Any]:
         if not services.safety.check("click"):
             return error("input_click", "blocked by safety gate")
@@ -103,6 +111,10 @@ def register_input_tools(registry: ToolRegistry, services: Any) -> None:
             target_value_after = after_snapshot.focused_control.get("value") or after_snapshot.focused_control.get("text")
         value_changed = before_value != after_value
         target_changed = target_value_before != target_value_after if target_value_before is not None else None
+        executor_validation = ((result.payload or {}).get("validation") or {}) if isinstance(result.payload, dict) else {}
+        validation_passed = executor_validation.get("passed")
+        if validation_passed is None:
+            validation_passed = bool(result.ok and value_changed)
         validation = {
             "checked": True,
             "field": "focused_control.value",
@@ -110,7 +122,7 @@ def register_input_tools(registry: ToolRegistry, services: Any) -> None:
             "after_value": after_value,
             "changed": value_changed,
             "expected_change": True,
-            "passed": (not result.ok) or value_changed,
+            "passed": validation_passed,
             "target_control": target_control,
             "target_value_before": target_value_before,
             "target_value_after": target_value_after,
@@ -128,15 +140,7 @@ def register_input_tools(registry: ToolRegistry, services: Any) -> None:
         if target_control is not None and isinstance(target_control, dict):
             payload["target_control"] = target_control
 
-        return ok(
-            "input_type",
-            input_payload(
-                result.tool or "input_type",
-                result.ok,
-                result.detail,
-                payload,
-            ),
-        )
+        return input_response("input_type", result.tool or "input_type", result, payload)
 
     def input_multi_select(coordinates: list[dict[str, int]], press_ctrl: bool = False) -> dict[str, Any]:
         if not services.safety.check("multi_select"):
@@ -168,12 +172,7 @@ def register_input_tools(registry: ToolRegistry, services: Any) -> None:
         if not services.safety.check("launch_app"):
             return error("input_launch_app", "blocked by safety gate")
         result = services.executor.launch_app(name)
-        return ToolResponse(
-            ok=result.ok,
-            tool="input_launch_app",
-            message="ok" if result.ok else result.detail,
-            data=input_payload(result.tool or "input_launch_app", result.ok, result.detail, result.payload),
-        ).as_dict()
+        return input_response("input_launch_app", result.tool or "input_launch_app", result)
 
     registry.register(ToolSpec(name="input_click", kind="input", params_schema={"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "button": {"type": "string", "default": "left"}, "clicks": {"type": "integer", "default": 1}}, "required": ["x", "y"]}, result_schema=RESULT_SCHEMAS["input"], permission="click", executor=input_click, description="Click a coordinate. Use this when the target point is already known and you want a direct pointer action.\n\nParameters: x/y set the target coordinate; button picks left, middle, or right; clicks sets the click count.\nReturns: standard input envelope with action, ok, detail, and payload. Payload may include click coordinates, button, click count, and hit-test element information.\nSafety: verify focus before and after the click.\nBehavior note: use this as part of an observe -> click -> observe loop so the updated desktop state can be verified after the action.\nExamples: {\"x\": 100, \"y\": 200}, {\"x\": 100, \"y\": 200, \"button\": \"right\", \"clicks\": 2}.\n\nRuntime note: the element payload may include richer hit-test metadata such as z-order, ancestry depth, bounds, and confidence scoring.", param_description="x/y: target coordinate; button: left, middle, or right; clicks: click count.", result_description="Standard input envelope with action, ok, detail, and payload. Payload may include click coordinates, button, click count, and hit-test element information.", input_examples=INPUT_EXAMPLES.get("input_click", []), output_examples=[{"ok": True, "tool": "input_click", "message": "ok", "data": {"action": "input_click", "ok": True, "detail": "clicked:618,1564:left:1", "payload": {"x": 618, "y": 1564, "button": "left", "clicks": 1, "element": {"type": "Button", "name": "Start", "automation_id": "StartMenuButton", "class_name": "StartMenuButton", "role": "push button", "process_id": 1234, "window_title": "Start", "found": True, "confidence": 0.932, "z_index": 0, "ancestry_depth": 1, "bounds": {"left": 600, "top": 1540, "right": 640, "bottom": 1580}, "source": "tree_state"}}}}], safety_notes="Verify focus before and after the click.", implementation_notes="Delegates to the executor click path.") )
     registry.register(ToolSpec(name="input_move", kind="input", params_schema={"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}, result_schema=RESULT_SCHEMAS["input"], permission="move", executor=input_move, description="Move the pointer. Use this for hover prep, target acquisition, or drag origin setup.\n\nParameters: x/y set the pointer destination.\nReturns: standard input envelope with the move result.\nSafety: pointer movement only; no application state change.\nExamples: {\"x\": 100, \"y\": 200}.", param_description="x/y: pointer destination.", result_description="Standard input envelope with the move result.", input_examples=INPUT_EXAMPLES.get("input_move", []), output_examples=[], safety_notes="Pointer movement only; no application state change.", implementation_notes="Delegates to the executor move path.") )

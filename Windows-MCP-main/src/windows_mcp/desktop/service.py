@@ -1003,6 +1003,13 @@ class Desktop:
         if matched_app is None:
             return None
         app_name, score = matched_app
+        normalized_candidate = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", candidate.lower()).strip()
+        normalized_app = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", app_name.lower()).strip()
+        candidate_tokens = [token for token in normalized_candidate.split() if token]
+        app_tokens = [token for token in normalized_app.split() if token]
+        executable_like = candidate.lower().endswith(".exe") or (len(candidate_tokens) == 1 and len(candidate_tokens[0]) <= 12)
+        if executable_like and candidate_tokens and candidate_tokens != app_tokens:
+            return None
         appid = apps_map.get(app_name)
         if appid is None:
             return None
@@ -1177,8 +1184,12 @@ class Desktop:
         for kind, candidate in candidates:
             attempts.append(f"{kind}:{candidate}")
             result: tuple[str, int, int] | None
-            if kind in {"alias", "start_menu", "shell_app"}:
+            if kind == "alias":
+                result = self._launch_via_command_name(candidate) or self._launch_via_direct_path(candidate) or self._launch_via_start_menu(candidate)
+            elif kind in {"start_menu", "shell_app"}:
                 result = self._launch_via_start_menu(candidate)
+            elif kind == "direct":
+                result = self._launch_via_direct_path(candidate) or self._launch_via_command_name(candidate) or self._launch_via_start_menu(candidate)
             elif kind == "command":
                 result = self._launch_via_command_name(candidate)
             elif kind == "install_dir":
