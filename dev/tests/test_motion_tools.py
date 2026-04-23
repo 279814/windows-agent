@@ -43,7 +43,7 @@ def test_motion_preview_registration_adds_new_tool() -> None:
     register_motion_tools(registry, services)
 
     spec = registry.get("motion_preview")
-    assert spec.kind == "input"
+    assert spec.kind == "motion"
     assert spec.permission == "motion_preview"
     assert spec.input_examples == [{"kind": "drag", "start_x": 10, "start_y": 10, "end_x": 100, "end_y": 100}]
 

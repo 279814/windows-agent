@@ -15,7 +15,7 @@ def _chapter(title: str, summary: str, sections: list[dict[str, Any]]) -> dict[s
 
 
 def build_readme(registry: ToolRegistry) -> dict[str, Any]:
-    summary = "Windows desktop agent MCP server for observation, input, window control, and task orchestration, with explicit verification semantics, handle/pid target selection guidance, and TODO placeholders."
+    summary = "Windows desktop agent MCP server for observation, input, window control, motion planning, overlay inspection, and task orchestration, with explicit verification semantics, handle/pid target selection guidance, discoverability metadata, and TODO placeholders."
     chapter = _chapter(
         "Desktop Agent Dev Workspace",
         summary,
@@ -180,6 +180,7 @@ def build_security(registry: ToolRegistry) -> dict[str, Any]:
                     "Placeholder vision tools are intentionally exposed as TODO/not-implemented so clients can branch to fallback strategies.",
                     "New motion and overlay tools are additive helpers and should not be used to rewrite legacy tool execution flows.",
                     "Resource discovery should include motion_preview and overlay_state so clients can enumerate the new tools without inspecting internal modules.",
+                    "phase1 is complete when motion_preview and overlay_state are discoverable through catalog, handbook, tool index, and tool discovery resources.",
                 ],
             },
             {
@@ -196,7 +197,7 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
     return {
         "name": "tool-handbook",
         "title": "Desktop Agent Tool Handbook",
-        "summary": "Formal directory for MCP clients and agents, including verification semantics, handle/pid targeting rules, input payload expectations, and TODO placeholders.",
+        "summary": "Formal directory for MCP clients and agents, including verification semantics, handle/pid targeting rules, motion/overlay expectations, input payload expectations, and TODO placeholders.",
         "sections": [
             {"heading": "Overview", "resource": "desktop-agent-dev://readme", "summary": RESOURCE_DESCRIPTIONS["desktop-agent-dev://readme"]},
             {"heading": "Tool Catalog", "resource": "desktop-agent-dev://catalog", "summary": RESOURCE_DESCRIPTIONS["desktop-agent-dev://catalog"]},
@@ -210,7 +211,7 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
                 "Use catalog for grouped tool descriptions, examples, and implementation status.",
                 "Use tool-index for compact per-tool lookup without the full handbook body.",
                 "Use capabilities and security when a client needs feature gating, risk posture, or fallback policy.",
-                "Use the discovery hints inside tool-index when a client wants to enumerate motion_preview or overlay_state without scanning every tool entry.",
+                "Use the discovery hints inside tool-index or tool-discovery when a client wants to enumerate motion_preview or overlay_state without scanning every tool entry.",
             ],
             "verification_semantics": {
                 "window_tools": [
@@ -228,10 +229,12 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
                 "motion_tools": [
                     "motion_preview is read-only planning.",
                     "Inspect the path, phase, overlay_state, and metadata fields before using the path as the basis for a real motion or drag step.",
+                    "motion_preview belongs to the phase1 focus set together with overlay_state.",
                 ],
                 "overlay_tools": [
                     "overlay_state is read-only and reports the current virtual cursor and trail state.",
                     "Use visible, cursor_x, cursor_y, trail, and metadata to confirm overlay availability and current state.",
+                    "overlay_state belongs to the phase1 focus set together with motion_preview.",
                 ],
                 "todo_placeholders": "ocr_extract, ui_match, vision_capture, and vision_locate remain TODO placeholders and intentionally return not_implemented.",
             },

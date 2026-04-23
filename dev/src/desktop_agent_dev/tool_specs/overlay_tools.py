@@ -52,10 +52,10 @@ def register_overlay_tools(registry: ToolRegistry, services: Any) -> None:
             executor=overlay_state,
             description="Read the current dev overlay state, including the latest virtual cursor position and trail, without mutating existing tool implementations.",
             param_description="No parameters. Returns the current overlay snapshot.",
-            result_description="Read-only overlay snapshot with visibility, cursor position, trail, and metadata.",
+            result_description="Read-only overlay snapshot with visibility, cursor position, trail, metadata, and optional motion-state data.",
             input_examples=[{}],
             output_examples=OVERLAY_STATE_OUTPUT_EXAMPLES,
             safety_notes="Read-only; no desktop side effects.",
-            implementation_notes="Reads the overlay renderer snapshot exposed through the executor and returns normalized state.",
+            implementation_notes="Reads the overlay renderer snapshot exposed through the executor and returns normalized state. This is one of the phase1 focus tools for virtual cursor inspection.",
         )
     )

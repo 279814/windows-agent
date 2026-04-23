@@ -76,16 +76,16 @@ def register_motion_tools(registry: ToolRegistry, services: Any) -> None:
 
     registry.register(ToolSpec(
         name="motion_preview",
-        kind="input",
+        kind="motion",
         params_schema=motion_schema,
         result_schema=RESULT_SCHEMAS["input"],
         permission="motion_preview",
         executor=motion_preview,
-        description="Preview a motion path without changing existing input tool behavior. Use this to inspect planned cursor travel and overlay state before dispatching real actions. Supports humanized trajectory controls including hover_ms, jitter_px, accel, and decel for realistic mouse shaping.",
+        description="Preview a motion path without changing existing cursor behavior. Use this to inspect planned cursor travel and overlay state before dispatching real actions. Supports humanized trajectory controls including hover_ms, jitter_px, accel, and decel for realistic mouse shaping.",
         param_description="kind/start/end/steps/hover_ms/jitter_px/accel/decel: motion planning inputs. Provide coordinates using start_x/start_y and end_x/end_y. Optional hover_ms adds a natural dwell, jitter_px adds humanization noise, and accel/decel shape the motion envelope.",
-        result_description="Standard input envelope with the planned motion path, motion phase, overlay state snapshot, and executor metadata, including humanized trajectory settings when provided.",
+        result_description="Standard motion envelope with the planned path, motion phase, overlay state snapshot, and executor metadata, including humanized trajectory settings when provided.",
         input_examples=[{"kind": "drag", "start_x": 10, "start_y": 10, "end_x": 100, "end_y": 100}],
         output_examples=MOTION_PREVIEW_OUTPUT_EXAMPLES,
         safety_notes="Planning is gated by the safety service, but the tool is intended to be read-only with respect to existing input implementations.",
-        implementation_notes="Calls the orchestrator-facing executor motion preview path and surfaces the generated path plus overlay snapshot.",
+        implementation_notes="Calls the orchestrator-facing executor motion preview path and surfaces the generated path plus overlay snapshot. This is one of the phase1 focus tools for cursor planning.",
     ))

@@ -154,13 +154,15 @@ class ToolRegistry:
         return {
             "version": "1.6",
             "stage": "phase1",
+            "phase1_status": "complete",
+            "phase1_focus": ["motion_preview", "overlay_state"],
             "tool_catalog": self.tool_catalog(),
             "group_catalog": self.group_catalog(),
             "resource_index": self.resource_index(),
             "capabilities": self.capabilities(),
             "policy": self.policy(),
             "examples": self.examples(),
-            "summary": "Windows desktop agent tool metadata for observation, input, window control, and task orchestration, with explicit verification semantics, handle/pid targeting guidance, multi-source window verification, and TODO placeholders.",
+            "summary": "Windows desktop agent tool metadata for observation, input, window control, motion planning, overlay inspection, and task orchestration, with explicit verification semantics, handle/pid targeting guidance, discoverability metadata, and TODO placeholders.",
             "todo_placeholders": list(TODO_PLACEHOLDER_TOOLS),
         }
 
