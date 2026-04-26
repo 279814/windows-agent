@@ -86,6 +86,27 @@ def test_overlay_window_colorref_matches_windows_bgr_layout() -> None:
     assert TkOverlayWindow._colorref("#010203") == 0x030201
 
 
+def test_overlay_window_pointer_polygon_geometry_is_stable() -> None:
+    from desktop_agent_dev.overlay_window import TkOverlayWindow
+
+    points = TkOverlayWindow._pointer_polygon_points(40, 36, 14, 36, 24)
+
+    assert len(points) == 14
+    assert points[0:2] == [40, 36]
+    assert max(points[::2]) > 40
+    assert max(points[1::2]) > 36
+
+
+def test_overlay_window_status_badge_visibility_is_scoped() -> None:
+    from desktop_agent_dev.overlay_window import TkOverlayWindow
+
+    assert TkOverlayWindow._should_draw_status_badge("idle", pressed=False) is False
+    assert TkOverlayWindow._should_draw_status_badge("animating", pressed=False) is False
+    assert TkOverlayWindow._should_draw_status_badge("verifying", pressed=False) is True
+    assert TkOverlayWindow._should_draw_status_badge("failed", pressed=False) is True
+    assert TkOverlayWindow._should_draw_status_badge("anything", pressed=True) is True
+
+
 def test_overlay_publishes_snapshots_to_desktop_presenter() -> None:
     presenter = FakePresenter()
     overlay = OverlayRenderer(presenter=presenter)
