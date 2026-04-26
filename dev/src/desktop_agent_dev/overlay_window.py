@@ -20,16 +20,21 @@ SM_YVIRTUALSCREEN = 77
 SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
 GWL_EXSTYLE = -20
+GWL_WNDPROC = -4
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_NOACTIVATE = 0x08000000
+WS_DISABLED = 0x08000000
 LWA_COLORKEY = 0x00000001
 HWND_TOPMOST = -1
 SWP_NOMOVE = 0x0002
 SWP_NOSIZE = 0x0001
 SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
+SWP_FRAMECHANGED = 0x0020
+WM_NCHITTEST = 0x0084
+HTTRANSPARENT = -1
 
 
 class OverlayWindowPresenter(Protocol):
@@ -63,9 +68,7 @@ def overlay_window_enabled() -> bool:
     env_value = os.environ.get("DESKTOP_AGENT_DEV_OVERLAY_WINDOW")
     if env_value is not None:
         return env_value.strip().lower() not in {"0", "false", "no", "off"}
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        return False
-    return os.name == "nt"
+    return False
 
 
 class TkOverlayWindow:
@@ -79,6 +82,8 @@ class TkOverlayWindow:
         self._available = tk is not None and os.name == "nt"
         self._closed = False
         self._bg = "#010203"
+        self._old_wndproc = None
+        self._wndproc = None
 
     def publish(self, frame: object) -> None:
         if self._closed or not self._available:
@@ -257,14 +262,36 @@ class TkOverlayWindow:
         try:
             hwnd = wintypes.HWND(root.winfo_id())
             user32 = ctypes.windll.user32
-            ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            get_window_long_ptr = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+            set_window_long_ptr = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+            ex_style = get_window_long_ptr(hwnd, GWL_EXSTYLE)
             ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
-            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
+            set_window_long_ptr(hwnd, GWL_EXSTYLE, ex_style)
+            root.wm_attributes("-disabled", True)
             color_key = self._colorref(self._bg)
             user32.SetLayeredWindowAttributes(hwnd, ctypes.c_uint(color_key), 0, LWA_COLORKEY)
-            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
+            self._install_transparent_hit_test(hwnd)
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED)
         except Exception:
             return
+
+    def _install_transparent_hit_test(self, hwnd: wintypes.HWND) -> None:
+        user32 = ctypes.windll.user32
+        get_window_long_ptr = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        set_window_long_ptr = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+        call_window_proc = user32.CallWindowProcW
+
+        WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
+        @WNDPROC
+        def wndproc(window_handle, message, w_param, l_param):
+            if message == WM_NCHITTEST:
+                return HTTRANSPARENT
+            return call_window_proc(self._old_wndproc, window_handle, message, w_param, l_param)
+
+        self._wndproc = wndproc
+        self._old_wndproc = get_window_long_ptr(hwnd, GWL_WNDPROC)
+        set_window_long_ptr(hwnd, GWL_WNDPROC, wndproc)
 
     @staticmethod
     def _blend(color: str, background: str, ratio: float) -> str:
