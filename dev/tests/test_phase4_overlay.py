@@ -107,6 +107,16 @@ def test_overlay_window_status_badge_visibility_is_scoped() -> None:
     assert TkOverlayWindow._should_draw_status_badge("anything", pressed=True) is True
 
 
+def test_native_overlay_controller_clamps_window_rect() -> None:
+    from desktop_agent_dev.overlay_window import NativeOverlayWindowController
+
+    controller = NativeOverlayWindowController()
+    controller.virtual_screen_geometry = lambda: (0, 0, 100, 80)  # type: ignore[method-assign]
+
+    assert controller.clamp_window_rect(left=-10, top=-20, width=40, height=30) == (0, 0)
+    assert controller.clamp_window_rect(left=90, top=70, width=40, height=30) == (60, 50)
+
+
 def test_overlay_publishes_snapshots_to_desktop_presenter() -> None:
     presenter = FakePresenter()
     overlay = OverlayRenderer(presenter=presenter)

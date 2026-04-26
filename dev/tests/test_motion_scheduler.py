@@ -31,6 +31,7 @@ def test_execute_updates_cursor_state_and_metadata() -> None:
     assert "points" in result.metadata
     assert result.event is not None
     assert result.event.as_data()["phase"] == MotionPhase.VERIFIED.value
+    assert result.metadata["phase_history"] == ["planned", "animating", "executing", "verifying", "verified"]
 
 
 def test_transition_allowed_follows_phase_order() -> None:
@@ -50,3 +51,27 @@ def test_execute_cancelled_returns_cancelled_result() -> None:
     assert result.ok is False
     assert result.phase is MotionPhase.CANCELLED
     assert result.metadata["cancelled"] is True
+
+
+def test_execute_streams_points_and_phases_to_callback() -> None:
+    scheduler = MotionScheduler(seed=13)
+    action = scheduler.plan(kind="move", start=(0, 0), end=(20, 20), action_id="move-1")
+    updates: list[dict[str, object]] = []
+
+    scheduler.execute(action, steps=5, on_update=updates.append)
+
+    point_updates = [item for item in updates if item["type"] == "point"]
+    phase_updates = [item for item in updates if item["type"] == "phase"]
+    assert len(point_updates) == 5
+    assert [item["event"]["phase"] for item in phase_updates] == ["planned", "animating", "executing", "verifying", "verified"]
+
+
+def test_execute_can_cancel_from_user_interrupt_callback() -> None:
+    scheduler = MotionScheduler(seed=17)
+    action = scheduler.plan(kind="move", start=(0, 0), end=(30, 30), action_id="move-2")
+
+    result = scheduler.execute(action, steps=6, should_cancel=lambda phase, point: "user_takeover" if point is not None and point.x >= 10 else None)
+
+    assert result.ok is False
+    assert result.phase is MotionPhase.CANCELLED
+    assert result.metadata["cancel_reason"] == "user_takeover"

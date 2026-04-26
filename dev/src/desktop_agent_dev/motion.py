@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 from .pathgen import PathGenerator
 
@@ -171,6 +171,75 @@ class MotionScheduler:
     def build_path(self, action: MotionAction, steps: int = 16) -> list[MotionPoint]:
         return self._pathgen.build(action, steps=steps)
 
+    def _cancel_result(self, action: MotionAction, path: list[MotionPoint], *, reason: str | None = None) -> MotionResult:
+        cancelled_event = self._transition_cursor_state(action, MotionPhase.CANCELLED)
+        metadata = {"steps": len(path), "cancelled": True, "cancel_reason": reason, "phase_history": list(self.cursor_state.metadata.get("phase_history", []))}
+        return MotionResult(ok=False, phase=MotionPhase.CANCELLED, action=action, path=path, detail="motion cancelled" if reason is None else f"motion cancelled:{reason}", metadata=metadata, event=cancelled_event)
+
+    def _timestamp_ms(self, action: MotionAction, step_index: int, step_count: int) -> int:
+        if step_count <= 1:
+            return 0
+        ratio = step_index / max(step_count - 1, 1)
+        return round(action.duration_ms * ratio)
+
+    def _transition_cursor_state(self, action: MotionAction, phase: MotionPhase) -> MotionEvent:
+        state_map = {
+            MotionPhase.PLANNED: "planning",
+            MotionPhase.ANIMATING: "animating",
+            MotionPhase.EXECUTING: "executing",
+            MotionPhase.VERIFYING: "verifying",
+            MotionPhase.VERIFIED: "idle",
+            MotionPhase.FAILED: "failed",
+            MotionPhase.CANCELLED: "cancelled",
+        }
+        self.cursor_state.visible = True
+        self.cursor_state.phase = phase
+        self.cursor_state.state = state_map[phase]
+        self.cursor_state.active_action = action
+        self.cursor_state.target_x = action.end.x
+        self.cursor_state.target_y = action.end.y
+        if phase in {MotionPhase.CANCELLED, MotionPhase.FAILED, MotionPhase.VERIFIED}:
+            self.cursor_state.pressed = False
+        elif phase is MotionPhase.EXECUTING:
+            self.cursor_state.pressed = action.kind == "drag"
+        event = MotionEvent(
+            action_id=action.action_id or action.kind,
+            kind=action.kind,
+            phase=phase,
+            timestamp_ms=0,
+            detail=f"motion {phase.value}",
+            metadata={"target": {"x": action.end.x, "y": action.end.y}},
+        )
+        history = list(self.cursor_state.metadata.get("phase_history", []))
+        history.append(phase.value)
+        self.cursor_state.metadata["phase_history"] = history[-16:]
+        self.cursor_state.metadata["last_phase"] = phase.value
+        return event
+
+    def _step_cursor_state(self, action: MotionAction, point: MotionPoint, previous: MotionPoint | None, step_index: int, step_count: int) -> None:
+        self.cursor_state.x = point.x
+        self.cursor_state.y = point.y
+        self.cursor_state.trail.append(point)
+        if len(self.cursor_state.trail) > 128:
+            self.cursor_state.trail = self.cursor_state.trail[-128:]
+        if previous is None:
+            velocity = 0.0
+        else:
+            dx = point.x - previous.x
+            dy = point.y - previous.y
+            velocity = (dx * dx + dy * dy) ** 0.5
+        self.cursor_state.velocity = velocity
+        self.cursor_state.metadata.update(
+            {
+                "step_index": step_index,
+                "step_count": step_count,
+                "progress": round(step_index / max(step_count - 1, 1), 4) if step_count > 1 else 1.0,
+                "timestamp_ms": self._timestamp_ms(action, step_index, step_count),
+                "last_point": {"x": point.x, "y": point.y, "t": point.t},
+                "velocity": velocity,
+            }
+        )
+
     def plan(self, *, kind: str, start: tuple[int, int], end: tuple[int, int], duration_ms: int | None = None, metadata: dict[str, Any] | None = None, hover_ms: int = 0, jitter_px: int = 0, accel: float = 1.0, decel: float = 1.0, action_id: str | None = None) -> MotionAction:
         if duration_ms is None:
             duration_ms = DEFAULT_LONG_MOVE_MS if kind == "move" else DEFAULT_DRAG_MS if kind == "drag" else DEFAULT_CLICK_PREMOVE_MS
@@ -204,39 +273,78 @@ class MotionScheduler:
             metadata["target"] = {"x": action.end.x, "y": action.end.y}
         return MotionResult(ok=True, phase=MotionPhase.PLANNED, action=action, path=path, detail="motion planned", metadata=metadata, event=event)
 
-    def execute(self, action: MotionAction, steps: int = 16) -> MotionResult:
-        self.cursor_state.visible = True
-        self.cursor_state.phase = MotionPhase.ANIMATING
-        self.cursor_state.state = "animating"
-        self.cursor_state.active_action = action
-        self.cursor_state.target_x = action.end.x
-        self.cursor_state.target_y = action.end.y
+    def execute(self, action: MotionAction, steps: int = 16, on_update: Callable[[dict[str, Any]], None] | None = None, should_cancel: Callable[[MotionPhase, MotionPoint | None], str | None] | None = None) -> MotionResult:
         path = self.build_path(action, steps=steps)
+        planned_event = self._transition_cursor_state(action, MotionPhase.PLANNED)
+        if on_update is not None:
+            on_update({"type": "phase", "event": planned_event.as_data(), "cursor_state": self.cursor_state.snapshot()})
         if not path:
-            self.cursor_state.phase = MotionPhase.FAILED
-            self.cursor_state.state = "failed"
+            failed_event = self._transition_cursor_state(action, MotionPhase.FAILED)
             self.cursor_state.metadata = {"error": "empty_path", "kind": action.kind}
+            if on_update is not None:
+                on_update({"type": "phase", "event": failed_event.as_data(), "cursor_state": self.cursor_state.snapshot()})
             raise MotionExecutionError("Motion execution produced an empty path.")
         if action.cancelled:
-            self.cursor_state.phase = MotionPhase.CANCELLED
-            self.cursor_state.state = "cancelled"
-            event = MotionEvent(action_id=action.action_id or "cancelled", kind=action.kind, phase=MotionPhase.CANCELLED, timestamp_ms=0, detail="motion cancelled")
-            return MotionResult(ok=False, phase=MotionPhase.CANCELLED, action=action, path=path, detail="motion cancelled", metadata={"steps": len(path), "cancelled": True}, event=event)
-        self.cursor_state.phase = MotionPhase.EXECUTING
-        self.cursor_state.state = "executing"
-        self.cursor_state.pressed = action.kind == "drag"
-        self.cursor_state.phase = MotionPhase.VERIFYING
-        self.cursor_state.state = "verifying"
-        self.cursor_state.trail = list(path)
-        self.cursor_state.x = action.end.x
-        self.cursor_state.y = action.end.y
-        if len(path) >= 2:
-            dx = path[-1].x - path[-2].x
-            dy = path[-1].y - path[-2].y
-            self.cursor_state.velocity = (dx * dx + dy * dy) ** 0.5
-        self.cursor_state.phase = MotionPhase.VERIFIED
-        self.cursor_state.state = "idle"
-        self.cursor_state.pressed = False
+            cancelled = self._cancel_result(action, path)
+            if on_update is not None and cancelled.event is not None:
+                on_update({"type": "phase", "event": cancelled.event.as_data(), "cursor_state": self.cursor_state.snapshot()})
+            return cancelled
+        if should_cancel is not None:
+            cancel_reason = should_cancel(MotionPhase.ANIMATING, None)
+            if cancel_reason is not None:
+                cancelled = self._cancel_result(action, path, reason=cancel_reason)
+                if on_update is not None and cancelled.event is not None:
+                    on_update({"type": "phase", "event": cancelled.event.as_data(), "cursor_state": self.cursor_state.snapshot()})
+                return cancelled
+        animating_event = self._transition_cursor_state(action, MotionPhase.ANIMATING)
+        if on_update is not None:
+            on_update({"type": "phase", "event": animating_event.as_data(), "cursor_state": self.cursor_state.snapshot()})
+        self.cursor_state.trail = []
+        previous: MotionPoint | None = None
+        step_count = len(path)
+        for index, point in enumerate(path):
+            if should_cancel is not None:
+                cancel_reason = should_cancel(MotionPhase.ANIMATING, point)
+                if cancel_reason is not None:
+                    cancelled = self._cancel_result(action, path[: index + 1], reason=cancel_reason)
+                    if on_update is not None and cancelled.event is not None:
+                        on_update({"type": "phase", "event": cancelled.event.as_data(), "cursor_state": self.cursor_state.snapshot()})
+                    return cancelled
+            self._step_cursor_state(action, point, previous, index, step_count)
+            if on_update is not None:
+                on_update(
+                    {
+                        "type": "point",
+                        "point": {"x": point.x, "y": point.y, "t": point.t},
+                        "step_index": index,
+                        "step_count": step_count,
+                        "cursor_state": self.cursor_state.snapshot(),
+                    }
+                )
+            previous = point
+        executing_event = self._transition_cursor_state(action, MotionPhase.EXECUTING)
+        if on_update is not None:
+            on_update({"type": "phase", "event": executing_event.as_data(), "cursor_state": self.cursor_state.snapshot()})
+        if should_cancel is not None:
+            cancel_reason = should_cancel(MotionPhase.EXECUTING, previous)
+            if cancel_reason is not None:
+                cancelled = self._cancel_result(action, path, reason=cancel_reason)
+                if on_update is not None and cancelled.event is not None:
+                    on_update({"type": "phase", "event": cancelled.event.as_data(), "cursor_state": self.cursor_state.snapshot()})
+                return cancelled
+        verifying_event = self._transition_cursor_state(action, MotionPhase.VERIFYING)
+        if on_update is not None:
+            on_update({"type": "phase", "event": verifying_event.as_data(), "cursor_state": self.cursor_state.snapshot()})
+        if should_cancel is not None:
+            cancel_reason = should_cancel(MotionPhase.VERIFYING, previous)
+            if cancel_reason is not None:
+                cancelled = self._cancel_result(action, path, reason=cancel_reason)
+                if on_update is not None and cancelled.event is not None:
+                    on_update({"type": "phase", "event": cancelled.event.as_data(), "cursor_state": self.cursor_state.snapshot()})
+                return cancelled
+        verified_event = self._transition_cursor_state(action, MotionPhase.VERIFIED)
+        if on_update is not None:
+            on_update({"type": "phase", "event": verified_event.as_data(), "cursor_state": self.cursor_state.snapshot()})
         self.cursor_state.metadata = {
             "steps": len(path),
             "kind": action.kind,
@@ -247,14 +355,14 @@ class MotionScheduler:
             "decel": action.decel,
             "last_target": {"x": action.end.x, "y": action.end.y},
             "last_status": MotionPhase.VERIFIED.value,
+            "phase_history": list(self.cursor_state.metadata.get("phase_history", [])),
         }
-        metadata = {"steps": len(path), "verified": True, "debug_show_points": self.debug_show_points, "debug_show_target": self.debug_show_target}
+        metadata = {"steps": len(path), "verified": True, "debug_show_points": self.debug_show_points, "debug_show_target": self.debug_show_target, "phase_history": list(self.cursor_state.metadata.get("phase_history", []))}
         if self.debug_show_points:
             metadata["points"] = [{"x": point.x, "y": point.y, "t": point.t} for point in path]
         if self.debug_show_target:
             metadata["target"] = {"x": action.end.x, "y": action.end.y}
-        event = MotionEvent(action_id=action.action_id or "executed", kind=action.kind, phase=MotionPhase.VERIFIED, timestamp_ms=0, detail="motion executed", metadata=metadata)
-        return MotionResult(ok=True, phase=MotionPhase.VERIFIED, action=action, path=path, detail="motion executed", metadata=metadata, event=event)
+        return MotionResult(ok=True, phase=MotionPhase.VERIFIED, action=action, path=path, detail="motion executed", metadata=metadata, event=verified_event)
 
     def run(self, action: MotionAction, steps: int = 16) -> MotionResult:
         return self.execute(action, steps=steps)

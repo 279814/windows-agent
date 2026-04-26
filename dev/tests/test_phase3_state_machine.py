@@ -33,6 +33,7 @@ def test_motion_scheduler_cancel_and_state_flow() -> None:
 
     assert result.phase == MotionPhase.CANCELLED
     assert scheduler.cursor_state.phase == MotionPhase.CANCELLED
+    assert "cancelled" in result.metadata["phase_history"]
 
 
 def test_executor_records_failure_for_retry_and_timeout_paths() -> None:

@@ -45,6 +45,72 @@ class OverlayWindowPresenter(Protocol):
         ...
 
 
+class NativeOverlayWindowController:
+    """Native Win32 helper for geometry and click-through behavior."""
+
+    def __init__(self) -> None:
+        self._user32 = ctypes.windll.user32 if os.name == "nt" else None
+        self._old_wndproc = None
+        self._wndproc = None
+
+    def virtual_screen_geometry(self) -> tuple[int, int, int, int]:
+        if self._user32 is None:
+            return 0, 0, 1, 1
+        left = int(self._user32.GetSystemMetrics(SM_XVIRTUALSCREEN))
+        top = int(self._user32.GetSystemMetrics(SM_YVIRTUALSCREEN))
+        width = int(self._user32.GetSystemMetrics(SM_CXVIRTUALSCREEN))
+        height = int(self._user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
+        return left, top, max(1, width), max(1, height)
+
+    def clamp_window_rect(self, *, left: int, top: int, width: int, height: int) -> tuple[int, int]:
+        screen_left, screen_top, screen_width, screen_height = self.virtual_screen_geometry()
+        screen_right = screen_left + screen_width
+        screen_bottom = screen_top + screen_height
+        clamped_left = min(max(left, screen_left), max(screen_left, screen_right - width))
+        clamped_top = min(max(top, screen_top), max(screen_top, screen_bottom - height))
+        return clamped_left, clamped_top
+
+    def make_click_through(self, root: tk.Tk, bg: str) -> None:
+        if self._user32 is None:
+            return
+        hwnd = wintypes.HWND(root.winfo_id())
+        get_window_long_ptr = getattr(self._user32, "GetWindowLongPtrW", self._user32.GetWindowLongW)
+        set_window_long_ptr = getattr(self._user32, "SetWindowLongPtrW", self._user32.SetWindowLongW)
+        ex_style = get_window_long_ptr(hwnd, GWL_EXSTYLE)
+        ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+        set_window_long_ptr(hwnd, GWL_EXSTYLE, ex_style)
+        root.wm_attributes("-disabled", True)
+        self._user32.SetLayeredWindowAttributes(hwnd, ctypes.c_uint(self.colorref(bg)), 0, LWA_COLORKEY)
+        self._install_transparent_hit_test(hwnd)
+        self._user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED)
+
+    def _install_transparent_hit_test(self, hwnd: wintypes.HWND) -> None:
+        if self._user32 is None:
+            return
+        get_window_long_ptr = getattr(self._user32, "GetWindowLongPtrW", self._user32.GetWindowLongW)
+        set_window_long_ptr = getattr(self._user32, "SetWindowLongPtrW", self._user32.SetWindowLongW)
+        call_window_proc = self._user32.CallWindowProcW
+        WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
+        @WNDPROC
+        def wndproc(window_handle, message, w_param, l_param):
+            if message == WM_NCHITTEST:
+                return HTTRANSPARENT
+            return call_window_proc(self._old_wndproc, window_handle, message, w_param, l_param)
+
+        self._wndproc = wndproc
+        self._old_wndproc = get_window_long_ptr(hwnd, GWL_WNDPROC)
+        set_window_long_ptr(hwnd, GWL_WNDPROC, wndproc)
+
+    @staticmethod
+    def colorref(color: str) -> int:
+        value = color.lstrip("#")
+        red = int(value[0:2], 16)
+        green = int(value[2:4], 16)
+        blue = int(value[4:6], 16)
+        return red | (green << 8) | (blue << 16)
+
+
 @dataclass(slots=True)
 class OverlayWindowFrame:
     visible: bool
@@ -89,8 +155,7 @@ class TkOverlayWindow:
         self._available = tk is not None and os.name == "nt"
         self._closed = False
         self._bg = "#010203"
-        self._old_wndproc = None
-        self._wndproc = None
+        self._native = NativeOverlayWindowController()
 
     def publish(self, frame: object) -> None:
         if self._closed or not self._available:
@@ -181,13 +246,9 @@ class TkOverlayWindow:
             return
         width = self._WINDOW_SIZE
         height = self._WINDOW_SIZE
-        screen_left, screen_top, screen_width, screen_height = self._virtual_screen_geometry()
-        screen_right = screen_left + screen_width
-        screen_bottom = screen_top + screen_height
         desired_left = int(frame.cursor_x) - self._CURSOR_MARGIN_LEFT
         desired_top = int(frame.cursor_y) - self._CURSOR_MARGIN_TOP
-        left = min(max(desired_left, screen_left), max(screen_left, screen_right - width))
-        top = min(max(desired_top, screen_top), max(screen_top, screen_bottom - height))
+        left, top = self._native.clamp_window_rect(left=desired_left, top=desired_top, width=width, height=height)
         root.geometry(f"{width}x{height}+{left}+{top}")
         x = int(frame.cursor_x) - left
         y = int(frame.cursor_y) - top
@@ -335,14 +396,6 @@ class TkOverlayWindow:
             return True
         return normalized in {"failed", "drag", "dragging", "verifying"}
 
-    def _virtual_screen_geometry(self) -> tuple[int, int, int, int]:
-        user32 = ctypes.windll.user32
-        left = int(user32.GetSystemMetrics(SM_XVIRTUALSCREEN))
-        top = int(user32.GetSystemMetrics(SM_YVIRTUALSCREEN))
-        width = int(user32.GetSystemMetrics(SM_CXVIRTUALSCREEN))
-        height = int(user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
-        return left, top, max(1, width), max(1, height)
-
     @staticmethod
     def _pointer_polygon_points(x: int, y: int, width: int, height: int, size: int) -> list[int]:
         return [
@@ -364,38 +417,9 @@ class TkOverlayWindow:
 
     def _make_click_through(self, root: tk.Tk) -> None:
         try:
-            hwnd = wintypes.HWND(root.winfo_id())
-            user32 = ctypes.windll.user32
-            get_window_long_ptr = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
-            set_window_long_ptr = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
-            ex_style = get_window_long_ptr(hwnd, GWL_EXSTYLE)
-            ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
-            set_window_long_ptr(hwnd, GWL_EXSTYLE, ex_style)
-            root.wm_attributes("-disabled", True)
-            color_key = self._colorref(self._bg)
-            user32.SetLayeredWindowAttributes(hwnd, ctypes.c_uint(color_key), 0, LWA_COLORKEY)
-            self._install_transparent_hit_test(hwnd)
-            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED)
+            self._native.make_click_through(root, self._bg)
         except Exception:
             return
-
-    def _install_transparent_hit_test(self, hwnd: wintypes.HWND) -> None:
-        user32 = ctypes.windll.user32
-        get_window_long_ptr = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
-        set_window_long_ptr = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
-        call_window_proc = user32.CallWindowProcW
-
-        WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
-
-        @WNDPROC
-        def wndproc(window_handle, message, w_param, l_param):
-            if message == WM_NCHITTEST:
-                return HTTRANSPARENT
-            return call_window_proc(self._old_wndproc, window_handle, message, w_param, l_param)
-
-        self._wndproc = wndproc
-        self._old_wndproc = get_window_long_ptr(hwnd, GWL_WNDPROC)
-        set_window_long_ptr(hwnd, GWL_WNDPROC, wndproc)
 
     @staticmethod
     def _blend(color: str, background: str, ratio: float) -> str:
@@ -413,8 +437,4 @@ class TkOverlayWindow:
 
     @staticmethod
     def _colorref(color: str) -> int:
-        value = color.lstrip("#")
-        red = int(value[0:2], 16)
-        green = int(value[2:4], 16)
-        blue = int(value[4:6], 16)
-        return red | (green << 8) | (blue << 16)
+        return NativeOverlayWindowController.colorref(color)

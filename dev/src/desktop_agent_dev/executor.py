@@ -15,6 +15,7 @@ from .motion import MotionAction, MotionScheduler, MotionResult, MotionPhase, Mo
 from .overlay import OverlayRenderer
 from .schemas import InterruptionState, OverlayTransitionState, WindowLifecycleState
 from .state import TaskStore
+from .user_input_monitor import NativeUserTakeoverMonitor
 
 
 class ExecutorError(RuntimeError):
@@ -33,12 +34,13 @@ class InputResult:
 class Executor:
     """Desktop execution facade with real Windows-MCP backend support."""
 
-    def __init__(self, backend: Any | None = None, motion_scheduler: MotionScheduler | None = None, overlay_renderer: OverlayRenderer | None = None, task_store: TaskStore | None = None) -> None:
+    def __init__(self, backend: Any | None = None, motion_scheduler: MotionScheduler | None = None, overlay_renderer: OverlayRenderer | None = None, task_store: TaskStore | None = None, interruption_monitor: NativeUserTakeoverMonitor | None = None) -> None:
         self._backend = backend
         self._window_history: list[dict[str, Any]] = []
         self._motion_scheduler = motion_scheduler or MotionScheduler()
         self._overlay_renderer = overlay_renderer or OverlayRenderer()
         self._task_store = task_store or TaskStore()
+        self._interruption_monitor = interruption_monitor or NativeUserTakeoverMonitor()
         self._overlay_renderer.set_style(
             cursor_color="#5eead4",
             user_cursor_color="#f59e0b",
@@ -81,6 +83,84 @@ class Executor:
             "last_verified_at": overlay_snapshot.last_verified_at,
             "timeline": [dict(item) for item in overlay_snapshot.timeline],
         }
+
+    def _record_timeline(self, name: str, *, kind: str, phase: str, category: str, **data: Any) -> None:
+        self._overlay_renderer.record_timeline(name, {"at": datetime.now(timezone.utc).isoformat(), "kind": kind, "phase": phase, "category": category, **data})
+
+    def _local_interruption_reason(self, *, expected_cursor: tuple[int, int] | None = None) -> str | None:
+        return self._interruption_monitor.reason(expected_cursor=expected_cursor)
+
+    def _consume_motion_update(
+        self,
+        *,
+        kind: str,
+        start: tuple[int, int],
+        end: tuple[int, int],
+        steps: int,
+        hover_ms: int,
+        jitter_px: int,
+        accel: float,
+        decel: float,
+        update: dict[str, Any],
+    ) -> None:
+        if update.get("type") == "point":
+            point = update.get("point", {})
+            self._overlay_renderer.update_cursor(int(point.get("x", start[0])), int(point.get("y", start[1])))
+            self._record_timeline(
+                "motion_point",
+                kind=kind,
+                phase="animating",
+                category="motion",
+                point=point,
+                step_index=update.get("step_index"),
+                step_count=update.get("step_count"),
+            )
+            return
+        motion_event = update.get("event", {})
+        phase = str(motion_event.get("phase", MotionPhase.PLANNED.value))
+        self._overlay_renderer.attach_motion(
+            phase,
+            {
+                "kind": kind,
+                "steps": steps,
+                "hover_ms": hover_ms,
+                "jitter_px": jitter_px,
+                "accel": accel,
+                "decel": decel,
+                "last_target": {"x": end[0], "y": end[1]},
+                "phase_history": update.get("cursor_state", {}).get("metadata", {}).get("phase_history", []),
+            },
+        )
+        self._record_timeline(
+            "motion_phase",
+            kind=kind,
+            phase=phase,
+            category="motion",
+            motion_event=motion_event,
+        )
+
+    def _apply_motion_result_state(
+        self,
+        *,
+        kind: str,
+        end: tuple[int, int],
+        action: MotionAction,
+        result: MotionResult,
+        task_id: str | None = None,
+    ) -> None:
+        if result.phase is MotionPhase.CANCELLED:
+            cancel_reason = result.metadata.get("cancel_reason")
+            self._overlay_renderer.set_interruption_state(
+                "user_takeover",
+                reason=None if cancel_reason is None else f"local:{cancel_reason}",
+            )
+        self._overlay_renderer.attach_motion(result.phase.value, self._task_motion_event(kind=kind, phase=result.phase, action=action, error_message=result.detail if not result.ok else None))
+        self._update_task_state(
+            task_id,
+            action=self._task_motion_event(kind=kind, phase=result.phase, action=action, error_message=result.detail if not result.ok else None),
+            verified=result.ok,
+            error_message=None if result.ok else result.detail,
+        )
 
     def _sync_overlay_from_context(self, *, active_window: dict[str, Any] | None = None, phase: str | None = None, kind: str | None = None, target: tuple[int, int] | None = None, drag_start: tuple[int, int] | None = None, drag_active: bool | None = None, pause_ms: int | None = None, highlight: bool = False, tail_ms: int | None = None, status: OverlayTransitionState | None = None, interruption_state: InterruptionState | None = None, window_state: WindowLifecycleState | None = None) -> None:
         try:
@@ -136,6 +216,24 @@ class Executor:
 
     def _run_input_with_recovery(self, *, operation: str, recover_name: str | None = None, recover_handle: int | None = None, recover_pid: int | None = None, runner):
         attempt_notes: list[dict[str, Any]] = []
+        local_reason = self._local_interruption_reason()
+        if local_reason is not None:
+            self._overlay_renderer.set_interruption_state("user_takeover", reason=f"local:{local_reason}")
+            self._overlay_renderer.set_transition_state("paused", reason="local user takeover active")
+            return self._result(
+                operation,
+                f"paused:{operation}:user_takeover",
+                ok=False,
+                payload={
+                    "operation": operation,
+                    "interruption_state": "user_takeover",
+                    "interruption_reason": f"local:{local_reason}",
+                    "paused": True,
+                    "recovery_attempts": [],
+                    "overlay_state": self._overlay_snapshot_payload(),
+                },
+                tool=f"input_{operation}" if operation in {"click", "move", "drag", "scroll", "shortcut", "type"} else operation,
+            )
         if self._backend is not None and hasattr(self._backend, "is_user_control_active") and self._backend.is_user_control_active():
             self._overlay_renderer.set_interruption_state("user_takeover", reason="user control detected")
             self._overlay_renderer.set_transition_state("paused", reason="user takeover active")
@@ -156,23 +254,23 @@ class Executor:
         before = self._ensure_window_ready(recover_name, recover_handle, recover_pid)
         if before is not None:
             attempt_notes.append({"step": "ensure_window_ready", "window": before.get("name"), "handle": before.get("handle")})
-        self._overlay_renderer.record_timeline("input_begin", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "begin", "operation": operation, "recover_name": recover_name, "recover_handle": recover_handle, "recover_pid": recover_pid})
+        self._record_timeline("input_begin", kind=operation, phase="begin", category="input", operation=operation, recover_name=recover_name, recover_handle=recover_handle, recover_pid=recover_pid)
         failure_info: dict[str, Any] | None = None
         try:
             result = runner()
         except Exception as exc:
             failure_info = {"error": str(exc), "recovery_attempts": attempt_notes, "operation": operation}
             attempt_notes.append({"step": "runner_error", "error": str(exc)})
-            self._overlay_renderer.record_timeline("input_error", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "error", "operation": operation, "error": str(exc)})
+            self._record_timeline("input_error", kind=operation, phase="error", category="input", operation=operation, error=str(exc))
             if self._backend is not None and hasattr(self._backend, "is_user_control_active") and self._backend.is_user_control_active():
                 self._overlay_renderer.set_interruption_state("user_takeover", reason="user control detected during recovery")
                 self._overlay_renderer.set_transition_state("paused", reason="user takeover active")
                 raise
             before_retry = self._ensure_window_ready(recover_name, recover_handle, recover_pid)
             attempt_notes.append({"step": "recover_window", "window": None if before_retry is None else before_retry.get("name"), "handle": None if before_retry is None else before_retry.get("handle")})
-            self._overlay_renderer.record_timeline("input_retry", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "retry", "operation": operation, "window": None if before_retry is None else before_retry.get("name")})
+            self._record_timeline("input_retry", kind=operation, phase="retry", category="input", operation=operation, window=None if before_retry is None else before_retry.get("name"))
             result = runner()
-        self._overlay_renderer.record_timeline("input_end", {"at": datetime.now(timezone.utc).isoformat(), "kind": operation, "phase": "end", "operation": operation, "ok": result.ok, "detail": result.detail})
+        self._record_timeline("input_end", kind=operation, phase="end", category="input", operation=operation, ok=result.ok, detail=result.detail)
         if result.payload is None:
             result.payload = {}
         result.payload["recovery_attempts"] = attempt_notes
@@ -271,9 +369,21 @@ class Executor:
         start = self._normalize_input_point(start, display)
         end = self._normalize_input_point(end, display)
         action = self._motion_scheduler.plan(kind=kind, start=start, end=end, metadata={"kind": kind, **display}, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
-        result = self._motion_scheduler.execute(action, steps=steps)
+        def on_update(update: dict[str, Any]) -> None:
+            self._consume_motion_update(kind=kind, start=start, end=end, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel, update=update)
+
+        self._interruption_monitor.begin(expected_cursor=start, enable_pointer_drift=False)
+        try:
+            result = self._motion_scheduler.execute(
+                action,
+                steps=steps,
+                on_update=on_update,
+                should_cancel=lambda phase, point: self._local_interruption_reason(expected_cursor=None if point is None else (point.x, point.y)),
+            )
+        finally:
+            self._interruption_monitor.end()
         self._overlay_renderer.show()
-        self._overlay_renderer.attach_motion(result.phase.value, self._task_motion_event(kind=kind, phase=result.phase, action=action))
+        self._apply_motion_result_state(kind=kind, end=end, action=action, result=result)
         return {
             "motion": {
                 "ok": result.ok,
@@ -293,6 +403,7 @@ class Executor:
                 "path": [{"x": point.x, "y": point.y, "t": point.t} for point in result.path],
                 "detail": result.detail,
                 "metadata": result.metadata,
+                "event": None if result.event is None else result.event.as_data(),
             },
             "overlay_state": self._overlay_snapshot_payload(),
         }
@@ -376,8 +487,11 @@ class Executor:
         task_id: str | None = None,
     ) -> dict[str, Any]:
         action = self._motion_scheduler.plan(kind=kind, start=start, end=end, duration_ms=duration_ms, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel)
+        def on_update(update: dict[str, Any]) -> None:
+            self._consume_motion_update(kind=kind, start=start, end=end, steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel, update=update)
+        self._interruption_monitor.begin(expected_cursor=start, enable_pointer_drift=False)
         try:
-            result = self._motion_scheduler.execute(action, steps=steps)
+            result = self._motion_scheduler.execute(action, steps=steps, on_update=on_update, should_cancel=lambda phase, point: self._local_interruption_reason(expected_cursor=None if point is None else (point.x, point.y)))
         except MotionExecutionError as exc:
             self._overlay_renderer.attach_motion(MotionPhase.FAILED.value, {"kind": kind, "last_error": str(exc), "last_target": {"x": end[0], "y": end[1]}})
             self._update_task_state(task_id, action=self._task_motion_event(kind=kind, phase=MotionPhase.FAILED, action=action, error_message=str(exc)), error_message=str(exc))
@@ -391,6 +505,7 @@ class Executor:
                 "metadata": {"error": "execution_failed"},
                 "overlay_state": {"visible": overlay_snapshot.visible, "cursor_x": overlay_snapshot.cursor_x, "cursor_y": overlay_snapshot.cursor_y, "trail": [list(point) for point in overlay_snapshot.trail], "metadata": overlay_snapshot.metadata, "last_action_kind": overlay_snapshot.last_action_kind, "last_action_status": overlay_snapshot.last_action_status, "last_target": overlay_snapshot.last_target, "last_error": overlay_snapshot.last_error, "last_verified_at": overlay_snapshot.last_verified_at},
                 "task_state": self._task_store.get(task_id).status if task_id else None,
+                "execution_timeline": self._overlay_snapshot_payload().get("timeline", []),
             }
         except Exception as exc:
             self._overlay_renderer.attach_motion(MotionPhase.FAILED.value, {"kind": kind, "last_error": str(exc), "last_target": {"x": end[0], "y": end[1]}})
@@ -405,12 +520,13 @@ class Executor:
                 "metadata": {"error": "execution_failed"},
                 "overlay_state": {"visible": overlay_snapshot.visible, "cursor_x": overlay_snapshot.cursor_x, "cursor_y": overlay_snapshot.cursor_y, "trail": [list(point) for point in overlay_snapshot.trail], "metadata": overlay_snapshot.metadata, "last_action_kind": overlay_snapshot.last_action_kind, "last_action_status": overlay_snapshot.last_action_status, "last_target": overlay_snapshot.last_target, "last_error": overlay_snapshot.last_error, "last_verified_at": overlay_snapshot.last_verified_at},
                 "task_state": self._task_store.get(task_id).status if task_id else None,
+                "execution_timeline": self._overlay_snapshot_payload().get("timeline", []),
             }
-        self._overlay_renderer.update_cursor(end[0], end[1])
-        self._overlay_renderer.attach_motion(result.phase.value, {"kind": kind, "steps": len(result.path), "hover_ms": hover_ms, "jitter_px": jitter_px, "accel": accel, "decel": decel, "last_target": {"x": end[0], "y": end[1]}})
-        self._update_task_state(task_id, action=self._task_motion_event(kind=kind, phase=result.phase, action=action), verified=True)
+        finally:
+            self._interruption_monitor.end()
+        self._apply_motion_result_state(kind=kind, end=end, action=action, result=result, task_id=task_id)
         overlay_snapshot = self._overlay_renderer.snapshot()
-        return {"ok": result.ok, "phase": result.phase.value, "action": {"kind": result.action.kind, "start": {"x": result.action.start.x, "y": result.action.start.y}, "end": {"x": result.action.end.x, "y": result.action.end.y}, "duration_ms": result.action.duration_ms, "easing": result.action.easing, "metadata": result.action.metadata}, "path": [{"x": point.x, "y": point.y, "t": point.t} for point in result.path], "detail": result.detail, "metadata": result.metadata, "overlay_state": {"visible": overlay_snapshot.visible, "cursor_x": overlay_snapshot.cursor_x, "cursor_y": overlay_snapshot.cursor_y, "trail": [list(point) for point in overlay_snapshot.trail], "metadata": overlay_snapshot.metadata, "last_action_kind": overlay_snapshot.last_action_kind, "last_action_status": overlay_snapshot.last_action_status, "last_target": overlay_snapshot.last_target, "last_error": overlay_snapshot.last_error, "last_verified_at": overlay_snapshot.last_verified_at}, "task_state": self._task_store.get(task_id).status if task_id else None}
+        return {"ok": result.ok, "phase": result.phase.value, "action": {"kind": result.action.kind, "start": {"x": result.action.start.x, "y": result.action.start.y}, "end": {"x": result.action.end.x, "y": result.action.end.y}, "duration_ms": result.action.duration_ms, "easing": result.action.easing, "metadata": result.action.metadata}, "path": [{"x": point.x, "y": point.y, "t": point.t} for point in result.path], "detail": result.detail, "metadata": result.metadata, "event": None if result.event is None else result.event.as_data(), "overlay_state": {"visible": overlay_snapshot.visible, "cursor_x": overlay_snapshot.cursor_x, "cursor_y": overlay_snapshot.cursor_y, "trail": [list(point) for point in overlay_snapshot.trail], "metadata": overlay_snapshot.metadata, "last_action_kind": overlay_snapshot.last_action_kind, "last_action_status": overlay_snapshot.last_action_status, "last_target": overlay_snapshot.last_target, "last_error": overlay_snapshot.last_error, "last_verified_at": overlay_snapshot.last_verified_at}, "task_state": self._task_store.get(task_id).status if task_id else None, "execution_timeline": self._overlay_snapshot_payload().get("timeline", [])}
 
     _SHORTCUT_NOISE_PATTERNS = (
         r"\s*-\s*快捷方式$",
@@ -1045,9 +1161,9 @@ class Executor:
             if hasattr(self._backend, "move"):
                 self._backend.move((normalized_x, normalized_y))
             if hasattr(self._backend, "click"):
-                self._overlay_renderer.record_timeline("click_down", {"at": datetime.now(timezone.utc).isoformat(), "kind": "click", "phase": "down", "x": normalized_x, "y": normalized_y, "button": button, "clicks": clicks})
+                self._record_timeline("click_down", kind="click", phase="down", category="input", x=normalized_x, y=normalized_y, button=button, clicks=clicks)
                 self._backend.click((normalized_x, normalized_y), button=button, clicks=clicks)
-                self._overlay_renderer.record_timeline("click_up", {"at": datetime.now(timezone.utc).isoformat(), "kind": "click", "phase": "up", "x": normalized_x, "y": normalized_y, "button": button, "clicks": clicks})
+                self._record_timeline("click_up", kind="click", phase="up", category="input", x=normalized_x, y=normalized_y, button=button, clicks=clicks)
                 after_context = self._input_context_snapshot()
                 payload["target_verification"] = self._verify_click_target(before_context, after_context, element=element, button=button, clicks=clicks)
                 self._overlay_renderer.set_pressed(False)
@@ -1107,7 +1223,7 @@ class Executor:
             self._overlay_renderer.show()
             self._overlay_renderer.set_transition_state("switching", reason="drag in progress")
             self._overlay_renderer.set_target(normalized_end[0], normalized_end[1], visible=True)
-            self._overlay_renderer.record_timeline("drag_prepare", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "prepare", "start": {"x": normalized_start[0], "y": normalized_start[1]}, "end": {"x": normalized_end[0], "y": normalized_end[1]}, "pause_ms": 220})
+            self._record_timeline("drag_prepare", kind="drag", phase="prepare", category="input", start={"x": normalized_start[0], "y": normalized_start[1]}, end={"x": normalized_end[0], "y": normalized_end[1]}, pause_ms=220)
             time.sleep(0.22)
             self._overlay_renderer.set_drag_state(True, start={"x": normalized_start[0], "y": normalized_start[1]})
             self._overlay_renderer.set_pressed(True)
@@ -1126,11 +1242,11 @@ class Executor:
                 self._backend.move(normalized_start)
                 if hasattr(self._backend, "mouse_down"):
                     self._backend.mouse_down(normalized_start)
-                self._overlay_renderer.record_timeline("drag_down", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "down", "start": {"x": normalized_start[0], "y": normalized_start[1]}, "end": {"x": normalized_end[0], "y": normalized_end[1]}})
+                self._record_timeline("drag_down", kind="drag", phase="down", category="input", start={"x": normalized_start[0], "y": normalized_start[1]}, end={"x": normalized_end[0], "y": normalized_end[1]})
                 self._backend.drag(normalized_end)
                 if hasattr(self._backend, "mouse_up"):
                     self._backend.mouse_up(normalized_end)
-                self._overlay_renderer.record_timeline("drag_up", {"at": datetime.now(timezone.utc).isoformat(), "kind": "drag", "phase": "up", "start": {"x": normalized_start[0], "y": normalized_start[1]}, "end": {"x": normalized_end[0], "y": normalized_end[1]}})
+                self._record_timeline("drag_up", kind="drag", phase="up", category="input", start={"x": normalized_start[0], "y": normalized_start[1]}, end={"x": normalized_end[0], "y": normalized_end[1]})
                 after_context = self._input_context_snapshot()
                 payload["active_window_after"] = after_context["active_window"]
                 payload["focused_control_after"] = after_context["focused_control"]
@@ -2017,7 +2133,7 @@ class Executor:
         self._overlay_renderer.set_interruption_state(None)
         self._overlay_renderer.set_transition_state("focus_preparing", reason="focus_window invoked")
         active = self._snapshot_window(refresh=True)
-        self._overlay_renderer.record_timeline("focus_prepare", {"at": datetime.now(timezone.utc).isoformat(), "kind": "window_focus", "phase": "prepare", "pause_ms": 220, "window_state": "restoring" if self._window_is_minimized(active) else "normal"})
+        self._record_timeline("focus_prepare", kind="window_focus", phase="prepare", category="input", pause_ms=220, window_state="restoring" if self._window_is_minimized(active) else "normal")
         time.sleep(0.22)
         active = self._ensure_window_ready(name=name, handle=handle, pid=pid)
         if self._backend is None:
