@@ -46,6 +46,9 @@ def test_overlay_state_returns_snapshot() -> None:
     assert result["data"]["cursor_color"] == "#ff0000"
     assert result["data"]["cursor_size"] == 28
     assert result["data"]["persistent"] is True
+    assert result["data"]["pressed"] is True
+    assert result["data"]["target_visible"] is False
+    assert result["data"]["status_text"] == "idle"
     assert result["data"]["click_ripples"][0]["radius"] == 18
     assert result["data"]["drag_active"] is True
     assert result["data"]["display_id"] == "DISPLAY1"

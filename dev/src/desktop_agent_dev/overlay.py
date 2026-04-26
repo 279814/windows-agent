@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .overlay_window import OverlayWindowPresenter, TkOverlayWindow, overlay_window_enabled
+
 
 @dataclass(slots=True)
 class OverlayFrame:
@@ -14,6 +16,11 @@ class OverlayFrame:
     cursor_size: int = 28
     user_cursor_size: int = 14
     persistent: bool = True
+    pressed: bool = False
+    target_x: int | None = None
+    target_y: int | None = None
+    target_visible: bool = False
+    status_text: str = "idle"
     trail: list[tuple[int, int]] = field(default_factory=list)
     click_ripples: list[dict[str, int]] = field(default_factory=list)
     drag_active: bool = False
@@ -36,8 +43,11 @@ class OverlayFrame:
 class OverlayRenderer:
     """In-memory overlay state holder for the virtual mouse."""
 
-    def __init__(self) -> None:
+    def __init__(self, presenter: OverlayWindowPresenter | None = None) -> None:
         self.frame = OverlayFrame()
+        self._presenter = presenter
+        if self._presenter is None and overlay_window_enabled():
+            self._presenter = TkOverlayWindow()
         self.frame.metadata.update(
             {
                 "cursor_color": self.frame.cursor_color,
@@ -45,21 +55,30 @@ class OverlayRenderer:
                 "cursor_size": self.frame.cursor_size,
                 "user_cursor_size": self.frame.user_cursor_size,
                 "persistent": self.frame.persistent,
+                "pressed": self.frame.pressed,
+                "target_x": self.frame.target_x,
+                "target_y": self.frame.target_y,
+                "target_visible": self.frame.target_visible,
+                "status_text": self.frame.status_text,
             }
         )
+        self._publish()
 
     def show(self) -> None:
         self.frame.visible = True
+        self._publish()
 
     def hide(self) -> None:
         if not self.frame.persistent:
             self.frame.visible = False
+        self._publish()
 
     def set_display_context(self, *, display_id: str | None = None, scale_factor: float = 1.0, monitor_bounds: list[dict[str, int]] | None = None) -> None:
         self.frame.display_id = display_id
         self.frame.scale_factor = float(scale_factor)
         self.frame.monitor_bounds = [] if monitor_bounds is None else [dict(bounds) for bounds in monitor_bounds]
         self.frame.metadata.update({"display_id": display_id, "scale_factor": self.frame.scale_factor, "monitor_bounds": self.frame.monitor_bounds, "cursor_color": self.frame.cursor_color, "user_cursor_color": self.frame.user_cursor_color})
+        self._publish()
 
     def update_cursor(self, x: int, y: int) -> None:
         self.frame.cursor_x = x
@@ -68,6 +87,24 @@ class OverlayRenderer:
         if len(self.frame.trail) > 128:
             self.frame.trail = self.frame.trail[-128:]
         self.frame.metadata.update({"cursor_x": x, "cursor_y": y, "cursor_color": self.frame.cursor_color, "user_cursor_color": self.frame.user_cursor_color})
+        self._publish()
+
+    def set_target(self, x: int | None, y: int | None, *, visible: bool = True) -> None:
+        self.frame.target_x = None if x is None else int(x)
+        self.frame.target_y = None if y is None else int(y)
+        self.frame.target_visible = bool(visible and x is not None and y is not None)
+        self.frame.metadata.update({"target_x": self.frame.target_x, "target_y": self.frame.target_y, "target_visible": self.frame.target_visible})
+        self._publish()
+
+    def set_pressed(self, pressed: bool) -> None:
+        self.frame.pressed = bool(pressed)
+        self.frame.metadata["pressed"] = self.frame.pressed
+        self._publish()
+
+    def set_status_text(self, status_text: str) -> None:
+        self.frame.status_text = str(status_text)
+        self.frame.metadata["status_text"] = self.frame.status_text
+        self._publish()
 
     def set_style(
         self,
@@ -97,19 +134,29 @@ class OverlayRenderer:
                 "cursor_size": self.frame.cursor_size,
                 "user_cursor_size": self.frame.user_cursor_size,
                 "persistent": self.frame.persistent,
+                "pressed": self.frame.pressed,
+                "target_x": self.frame.target_x,
+                "target_y": self.frame.target_y,
+                "target_visible": self.frame.target_visible,
+                "status_text": self.frame.status_text,
             }
         )
+        self._publish()
 
     def draw_click_ripple(self, x: int, y: int, radius: int = 18) -> None:
         self.frame.click_ripples.append({"x": x, "y": y, "radius": radius})
         if len(self.frame.click_ripples) > 16:
             self.frame.click_ripples = self.frame.click_ripples[-16:]
         self.frame.metadata["click_ripple_count"] = len(self.frame.click_ripples)
+        self._publish()
 
     def set_drag_state(self, active: bool, *, start: dict[str, int] | None = None) -> None:
         self.frame.drag_active = active
         self.frame.drag_start = None if start is None else {"x": int(start.get("x", 0)), "y": int(start.get("y", 0))}
         self.frame.metadata.update({"drag_active": active, "drag_start": self.frame.drag_start})
+        self.frame.pressed = active
+        self.frame.metadata["pressed"] = self.frame.pressed
+        self._publish()
 
     def record_timeline(self, event: str, metadata: dict[str, Any] | None = None) -> None:
         item = {
@@ -126,21 +173,25 @@ class OverlayRenderer:
         if len(self.frame.timeline) > 64:
             self.frame.timeline = self.frame.timeline[-64:]
         self.frame.metadata["timeline_length"] = len(self.frame.timeline)
+        self._publish()
 
     def set_transition_state(self, state: str, *, reason: str | None = None) -> None:
         self.frame.transition_state = state
         self.frame.transition_reason = reason
         self.frame.metadata.update({"transition_state": state, "transition_reason": reason})
+        self._publish()
 
     def set_interruption_state(self, state: str | None, *, reason: str | None = None) -> None:
         self.frame.interruption_state = state
         self.frame.metadata.update({"interruption_state": state, "interruption_reason": reason})
         if state is None:
             self.frame.metadata.pop("interruption_reason", None)
+        self._publish()
 
     def attach_motion(self, phase: str, metadata: dict[str, Any] | None = None) -> None:
         self.frame.visible = True
         self.frame.last_action_status = phase
+        self.frame.status_text = phase
         self.record_timeline("motion", {"phase": phase, **({} if metadata is None else metadata)})
         self.frame.metadata.update({"motion_phase": phase})
         if metadata:
@@ -153,10 +204,30 @@ class OverlayRenderer:
                 self.frame.transition_reason = None if metadata["transition_reason"] is None else str(metadata["transition_reason"])
             if "last_target" in metadata and isinstance(metadata["last_target"], dict):
                 self.frame.last_target = {"x": int(metadata["last_target"].get("x", 0)), "y": int(metadata["last_target"].get("y", 0))}
+                self.frame.target_x = self.frame.last_target["x"]
+                self.frame.target_y = self.frame.last_target["y"]
+                self.frame.target_visible = True
             if "last_error" in metadata:
                 self.frame.last_error = None if metadata["last_error"] is None else str(metadata["last_error"])
             if "last_verified_at" in metadata:
                 self.frame.last_verified_at = None if metadata["last_verified_at"] is None else str(metadata["last_verified_at"])
+        self.frame.metadata.update(
+            {
+                "pressed": self.frame.pressed,
+                "target_x": self.frame.target_x,
+                "target_y": self.frame.target_y,
+                "target_visible": self.frame.target_visible,
+                "status_text": self.frame.status_text,
+            }
+        )
+        self._publish()
+
+    def close(self) -> None:
+        if self._presenter is not None:
+            try:
+                self._presenter.close()
+            except Exception:
+                pass
 
     def snapshot(self) -> OverlayFrame:
         return OverlayFrame(
@@ -168,6 +239,11 @@ class OverlayRenderer:
             cursor_size=self.frame.cursor_size,
             user_cursor_size=self.frame.user_cursor_size,
             persistent=self.frame.persistent,
+            pressed=self.frame.pressed,
+            target_x=self.frame.target_x,
+            target_y=self.frame.target_y,
+            target_visible=self.frame.target_visible,
+            status_text=self.frame.status_text,
             trail=list(self.frame.trail),
             click_ripples=[dict(ripple) for ripple in self.frame.click_ripples],
             drag_active=self.frame.drag_active,
@@ -186,3 +262,11 @@ class OverlayRenderer:
             last_verified_at=self.frame.last_verified_at,
             timeline=[dict(item) for item in self.frame.timeline],
         )
+
+    def _publish(self) -> None:
+        if self._presenter is None:
+            return
+        try:
+            self._presenter.publish(self.snapshot())
+        except Exception:
+            pass

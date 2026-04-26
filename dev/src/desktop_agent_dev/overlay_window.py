@@ -1,0 +1,216 @@
+from __future__ import annotations
+
+import atexit
+import ctypes
+from ctypes import wintypes
+from dataclasses import dataclass
+import os
+from queue import Empty, Queue
+import threading
+from typing import Protocol
+
+try:
+    import tkinter as tk
+except Exception:  # pragma: no cover - tkinter may be unavailable in some environments
+    tk = None  # type: ignore[assignment]
+
+
+SM_XVIRTUALSCREEN = 76
+SM_YVIRTUALSCREEN = 77
+SM_CXVIRTUALSCREEN = 78
+SM_CYVIRTUALSCREEN = 79
+GWL_EXSTYLE = -20
+WS_EX_LAYERED = 0x00080000
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_TRANSPARENT = 0x00000020
+LWA_COLORKEY = 0x00000001
+
+
+class OverlayWindowPresenter(Protocol):
+    def publish(self, frame: object) -> None:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+@dataclass(slots=True)
+class OverlayWindowFrame:
+    visible: bool
+    cursor_x: int
+    cursor_y: int
+    cursor_color: str
+    cursor_size: int
+    persistent: bool
+    pressed: bool
+    target_x: int | None
+    target_y: int | None
+    target_visible: bool
+    status_text: str
+    trail: list[tuple[int, int]]
+
+
+def overlay_window_enabled() -> bool:
+    env_value = os.environ.get("DESKTOP_AGENT_DEV_OVERLAY_WINDOW")
+    if env_value is not None:
+        return env_value.strip().lower() not in {"0", "false", "no", "off"}
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    return os.name == "nt"
+
+
+class TkOverlayWindow:
+    """Draws the virtual cursor in a transparent always-on-top desktop window."""
+
+    def __init__(self) -> None:
+        self._queue: Queue[OverlayWindowFrame | None] = Queue()
+        self._thread: threading.Thread | None = None
+        self._started = False
+        self._lock = threading.Lock()
+        self._available = tk is not None and os.name == "nt"
+        self._closed = False
+        self._bg = "#010203"
+
+    def publish(self, frame: object) -> None:
+        if self._closed or not self._available:
+            return
+        overlay_frame = OverlayWindowFrame(
+            visible=bool(getattr(frame, "visible", True)),
+            cursor_x=int(getattr(frame, "cursor_x", 0)),
+            cursor_y=int(getattr(frame, "cursor_y", 0)),
+            cursor_color=str(getattr(frame, "cursor_color", "#ff0000")),
+            cursor_size=int(getattr(frame, "cursor_size", 28)),
+            persistent=bool(getattr(frame, "persistent", True)),
+            pressed=bool(getattr(frame, "pressed", False)),
+            target_x=getattr(frame, "target_x", None),
+            target_y=getattr(frame, "target_y", None),
+            target_visible=bool(getattr(frame, "target_visible", False)),
+            status_text=str(getattr(frame, "status_text", "idle")),
+            trail=list(getattr(frame, "trail", [])),
+        )
+        self._ensure_started()
+        self._queue.put(overlay_frame)
+
+    def close(self) -> None:
+        self._closed = True
+        if not self._available:
+            return
+        self._queue.put(None)
+
+    def _ensure_started(self) -> None:
+        with self._lock:
+            if self._started or not self._available:
+                return
+            self._started = True
+            self._thread = threading.Thread(target=self._run, name="desktop-agent-overlay", daemon=True)
+            self._thread.start()
+            atexit.register(self.close)
+
+    def _run(self) -> None:  # pragma: no cover - exercised manually on Windows desktop
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            left, top, width, height = self._virtual_screen_geometry()
+            root.overrideredirect(True)
+            root.attributes("-topmost", True)
+            root.configure(bg=self._bg)
+            try:
+                root.wm_attributes("-transparentcolor", self._bg)
+            except Exception:
+                pass
+            root.geometry(f"{width}x{height}+{left}+{top}")
+            canvas = tk.Canvas(root, bg=self._bg, highlightthickness=0, bd=0)
+            canvas.place(x=0, y=0, width=width, height=height)
+            root.deiconify()
+            self._make_click_through(root)
+
+            def pump() -> None:
+                try:
+                    latest: OverlayWindowFrame | None = None
+                    while True:
+                        latest = self._queue.get_nowait()
+                except Empty:
+                    latest = latest if "latest" in locals() else None
+                if latest is None:
+                    if self._closed:
+                        try:
+                            root.destroy()
+                        except Exception:
+                            pass
+                        return
+                else:
+                    self._render(canvas, latest, left=left, top=top)
+                root.after(16, pump)
+
+            pump()
+            root.mainloop()
+        except Exception:
+            self._available = False
+
+    def _render(self, canvas: tk.Canvas, frame: OverlayWindowFrame, *, left: int, top: int) -> None:
+        canvas.delete("all")
+        should_draw = frame.visible or frame.persistent
+        if not should_draw:
+            return
+        x = frame.cursor_x - left
+        y = frame.cursor_y - top
+        radius = max(8, frame.cursor_size // 2)
+        trail = [(point[0] - left, point[1] - top) for point in frame.trail[-12:]]
+        if frame.target_visible and frame.target_x is not None and frame.target_y is not None:
+            target_x = int(frame.target_x) - left
+            target_y = int(frame.target_y) - top
+            target_radius = radius + 14
+            canvas.create_oval(target_x - target_radius, target_y - target_radius, target_x + target_radius, target_y + target_radius, outline=self._blend(frame.cursor_color, self._bg, 0.35), width=2)
+            canvas.create_oval(target_x - target_radius - 8, target_y - target_radius - 8, target_x + target_radius + 8, target_y + target_radius + 8, outline=self._blend(frame.cursor_color, self._bg, 0.55), width=1)
+        if len(trail) >= 2:
+            for index in range(1, len(trail)):
+                opacity = index / len(trail)
+                color = self._blend(frame.cursor_color, self._bg, max(0.15, 0.85 - opacity * 0.65))
+                x1, y1 = trail[index - 1]
+                x2, y2 = trail[index]
+                canvas.create_line(x1, y1, x2, y2, fill=color, width=max(2, radius // 4), smooth=True)
+        outline_width = 4 if frame.pressed else 3
+        canvas.create_oval(x - radius, y - radius, x + radius, y + radius, outline=frame.cursor_color, width=outline_width)
+        inner = max(3, radius // 3)
+        fill_color = self._blend(frame.cursor_color, "#ffffff", 0.15) if frame.pressed else frame.cursor_color
+        canvas.create_oval(x - inner, y - inner, x + inner, y + inner, fill=fill_color, outline=frame.cursor_color, width=1)
+        arm = radius + 8
+        canvas.create_line(x - arm, y, x + arm, y, fill=frame.cursor_color, width=2)
+        canvas.create_line(x, y - arm, x, y + arm, fill=frame.cursor_color, width=2)
+        badge_text = frame.status_text[:24]
+        badge_w = max(120, 14 + len(badge_text) * 8)
+        canvas.create_rectangle(24, 24, 24 + badge_w, 54, fill="#101418", outline=frame.cursor_color, width=1)
+        canvas.create_text(36, 39, text=badge_text, fill="#f8fafc", anchor="w", font=("Segoe UI", 11, "bold"))
+
+    def _virtual_screen_geometry(self) -> tuple[int, int, int, int]:
+        user32 = ctypes.windll.user32
+        left = int(user32.GetSystemMetrics(SM_XVIRTUALSCREEN))
+        top = int(user32.GetSystemMetrics(SM_YVIRTUALSCREEN))
+        width = int(user32.GetSystemMetrics(SM_CXVIRTUALSCREEN))
+        height = int(user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
+        return left, top, max(1, width), max(1, height)
+
+    def _make_click_through(self, root: tk.Tk) -> None:
+        try:
+            hwnd = wintypes.HWND(root.winfo_id())
+            user32 = ctypes.windll.user32
+            ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
+            ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, ctypes.c_uint(0x00010203), 0, LWA_COLORKEY)
+        except Exception:
+            return
+
+    @staticmethod
+    def _blend(color: str, background: str, ratio: float) -> str:
+        def _rgb(hex_color: str) -> tuple[int, int, int]:
+            value = hex_color.lstrip("#")
+            return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+
+        ratio = max(0.0, min(1.0, ratio))
+        r1, g1, b1 = _rgb(color)
+        r2, g2, b2 = _rgb(background)
+        r = round(r1 * (1 - ratio) + r2 * ratio)
+        g = round(g1 * (1 - ratio) + g2 * ratio)
+        b = round(b1 * (1 - ratio) + b2 * ratio)
+        return f"#{r:02x}{g:02x}{b:02x}"

@@ -121,8 +121,14 @@ class MotionResult:
 
 @dataclass(slots=True)
 class VirtualCursorState:
+    visible: bool = True
     x: int = 0
     y: int = 0
+    pressed: bool = False
+    target_x: int | None = None
+    target_y: int | None = None
+    velocity: float = 0.0
+    state: str = "idle"
     phase: MotionPhase = MotionPhase.PLANNED
     active_action: MotionAction | None = None
     trail: list[MotionPoint] = field(default_factory=list)
@@ -130,8 +136,14 @@ class VirtualCursorState:
 
     def snapshot(self) -> dict[str, Any]:
         return {
+            "visible": self.visible,
             "x": self.x,
             "y": self.y,
+            "pressed": self.pressed,
+            "target_x": self.target_x,
+            "target_y": self.target_y,
+            "velocity": self.velocity,
+            "state": self.state,
             "phase": self.phase.value,
             "active_action": None if self.active_action is None else {
                 "kind": self.active_action.kind,
@@ -178,6 +190,12 @@ class MotionScheduler:
 
     def plan_result(self, action: MotionAction, steps: int = 16) -> MotionResult:
         path = self.build_path(action, steps=steps)
+        self.cursor_state.visible = True
+        self.cursor_state.target_x = action.end.x
+        self.cursor_state.target_y = action.end.y
+        self.cursor_state.state = "planning"
+        self.cursor_state.phase = MotionPhase.PLANNED
+        self.cursor_state.active_action = action
         event = MotionEvent(action_id=action.action_id or "planned", kind=action.kind, phase=MotionPhase.PLANNED, timestamp_ms=0, detail="motion planned", metadata={"steps": len(path), "debug_show_points": self.debug_show_points, "debug_show_target": self.debug_show_target})
         metadata = {"steps": len(path), "debug_show_points": self.debug_show_points, "debug_show_target": self.debug_show_target}
         if self.debug_show_points:
@@ -187,23 +205,38 @@ class MotionScheduler:
         return MotionResult(ok=True, phase=MotionPhase.PLANNED, action=action, path=path, detail="motion planned", metadata=metadata, event=event)
 
     def execute(self, action: MotionAction, steps: int = 16) -> MotionResult:
+        self.cursor_state.visible = True
         self.cursor_state.phase = MotionPhase.ANIMATING
+        self.cursor_state.state = "animating"
         self.cursor_state.active_action = action
+        self.cursor_state.target_x = action.end.x
+        self.cursor_state.target_y = action.end.y
         path = self.build_path(action, steps=steps)
         if not path:
             self.cursor_state.phase = MotionPhase.FAILED
+            self.cursor_state.state = "failed"
             self.cursor_state.metadata = {"error": "empty_path", "kind": action.kind}
             raise MotionExecutionError("Motion execution produced an empty path.")
         if action.cancelled:
             self.cursor_state.phase = MotionPhase.CANCELLED
+            self.cursor_state.state = "cancelled"
             event = MotionEvent(action_id=action.action_id or "cancelled", kind=action.kind, phase=MotionPhase.CANCELLED, timestamp_ms=0, detail="motion cancelled")
             return MotionResult(ok=False, phase=MotionPhase.CANCELLED, action=action, path=path, detail="motion cancelled", metadata={"steps": len(path), "cancelled": True}, event=event)
         self.cursor_state.phase = MotionPhase.EXECUTING
+        self.cursor_state.state = "executing"
+        self.cursor_state.pressed = action.kind == "drag"
         self.cursor_state.phase = MotionPhase.VERIFYING
+        self.cursor_state.state = "verifying"
         self.cursor_state.trail = list(path)
         self.cursor_state.x = action.end.x
         self.cursor_state.y = action.end.y
+        if len(path) >= 2:
+            dx = path[-1].x - path[-2].x
+            dy = path[-1].y - path[-2].y
+            self.cursor_state.velocity = (dx * dx + dy * dy) ** 0.5
         self.cursor_state.phase = MotionPhase.VERIFIED
+        self.cursor_state.state = "idle"
+        self.cursor_state.pressed = False
         self.cursor_state.metadata = {
             "steps": len(path),
             "kind": action.kind,

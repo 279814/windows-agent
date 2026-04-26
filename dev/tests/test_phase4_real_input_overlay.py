@@ -49,7 +49,9 @@ def test_click_updates_overlay_and_uses_backend() -> None:
     assert result.ok is True
     assert result.payload["overlay_state"]["visible"] is True
     assert result.payload["overlay_state"]["click_ripples"]
-    assert result.payload["overlay_state"]["cursor_x"] == 100
+    assert result.payload["overlay_state"]["cursor_x"] == 150
+    assert result.payload["overlay_state"]["target_visible"] is True
+    assert result.payload["overlay_state"]["status_text"] in {"verified", "click"}
 
 
 def test_move_reaches_backend_without_unboundlocal_error() -> None:
@@ -62,6 +64,8 @@ def test_move_reaches_backend_without_unboundlocal_error() -> None:
     assert ("move", (150, 300)) in backend.calls
     assert result.payload["target_verification"]["ok"] is True
     assert result.payload["overlay_state"]["persistent"] is True
+    assert result.payload["overlay_state"]["target_x"] == 150
+    assert result.payload["overlay_state"]["target_y"] == 300
 
 
 def test_focus_and_type_publish_overlay_state() -> None:
@@ -86,3 +90,5 @@ def test_drag_runs_with_normalized_coordinates() -> None:
     assert result.ok is True
     assert ("move", (15, 15)) in backend.calls
     assert ("drag", (150, 180)) in backend.calls
+    assert result.payload["overlay_state"]["target_x"] == 150
+    assert result.payload["overlay_state"]["target_y"] == 180

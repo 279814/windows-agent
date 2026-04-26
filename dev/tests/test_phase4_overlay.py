@@ -3,10 +3,25 @@ from __future__ import annotations
 from desktop_agent_dev.overlay import OverlayRenderer
 
 
+class FakePresenter:
+    def __init__(self) -> None:
+        self.frames = []
+        self.closed = False
+
+    def publish(self, frame) -> None:
+        self.frames.append(frame)
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def test_overlay_tracks_pointer_trail_click_ripples_and_drag_state() -> None:
     overlay = OverlayRenderer()
     overlay.update_cursor(10, 20)
     overlay.update_cursor(12, 24)
+    overlay.set_target(40, 50, visible=True)
+    overlay.set_pressed(True)
+    overlay.set_status_text("animating")
     overlay.draw_click_ripple(12, 24, radius=22)
     overlay.set_drag_state(True, start={"x": 10, "y": 20})
 
@@ -17,6 +32,10 @@ def test_overlay_tracks_pointer_trail_click_ripples_and_drag_state() -> None:
     assert snapshot.cursor_y == 24
     assert snapshot.cursor_size > snapshot.user_cursor_size
     assert snapshot.persistent is True
+    assert snapshot.target_visible is True
+    assert snapshot.target_x == 40
+    assert snapshot.target_y == 50
+    assert snapshot.status_text == "animating"
     assert snapshot.trail[-1] == (12, 24)
     assert snapshot.click_ripples[0]["radius"] == 22
     assert snapshot.drag_active is True
@@ -48,3 +67,17 @@ def test_overlay_defaults_to_persistent_large_red_virtual_cursor() -> None:
     assert snapshot.cursor_size == 28
     assert snapshot.user_cursor_size == 14
     assert snapshot.persistent is True
+
+
+def test_overlay_publishes_snapshots_to_desktop_presenter() -> None:
+    presenter = FakePresenter()
+    overlay = OverlayRenderer(presenter=presenter)
+
+    overlay.update_cursor(30, 40)
+    overlay.set_style(cursor_size=32, persistent=True)
+    overlay.close()
+
+    assert presenter.frames
+    assert presenter.frames[-1].cursor_x == 30
+    assert presenter.frames[-1].cursor_size == 32
+    assert presenter.closed is True

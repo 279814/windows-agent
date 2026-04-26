@@ -76,3 +76,5 @@ def test_motion_preview_is_read_only_for_overlay_cursor() -> None:
     assert result["overlay_state"]["metadata"]["preview_only"] is True
     assert snapshot.cursor_x == 12
     assert snapshot.cursor_y == 34
+    assert executor._motion_scheduler.cursor_state.target_x == 100
+    assert executor._motion_scheduler.cursor_state.state == "planning"
