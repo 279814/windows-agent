@@ -121,6 +121,49 @@ INPUT_MOVE_OUTPUT_EXAMPLES = [
             "payload": {
                 "x": 1000,
                 "y": 600,
+                "phase": "verified",
+                "action": {
+                    "kind": "move",
+                    "start": {"x": 940, "y": 560},
+                    "end": {"x": 1000, "y": 600},
+                    "duration_ms": 640,
+                    "easing": "ease_out_quad",
+                    "metadata": {"kind": "move", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []},
+                },
+                "path": [{"x": 940, "y": 560, "t": 0.0}, {"x": 976, "y": 584, "t": 0.55}, {"x": 1000, "y": 600, "t": 1.0}],
+                "metadata": {"steps": 3, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                "event": {"action_id": "move", "kind": "move", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 1000, "y": 600}}},
+                "motion": {
+                    "ok": True,
+                    "phase": "verified",
+                    "action": {
+                        "kind": "move",
+                        "start": {"x": 940, "y": 560},
+                        "end": {"x": 1000, "y": 600},
+                        "duration_ms": 640,
+                        "easing": "ease_out_quad",
+                        "hover_ms": 0,
+                        "jitter_px": 0,
+                        "accel": 1.0,
+                        "decel": 1.0,
+                        "metadata": {"kind": "move", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []},
+                    },
+                    "path": [{"x": 940, "y": 560, "t": 0.0}, {"x": 976, "y": 584, "t": 0.55}, {"x": 1000, "y": 600, "t": 1.0}],
+                    "detail": "motion executed",
+                    "metadata": {"steps": 3, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                    "event": {"action_id": "move", "kind": "move", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 1000, "y": 600}}},
+                },
+                "motion_segments": {
+                    "execute": {
+                        "ok": True,
+                        "phase": "verified",
+                        "action": {"kind": "move", "start": {"x": 940, "y": 560}, "end": {"x": 1000, "y": 600}, "duration_ms": 640, "easing": "ease_out_quad", "hover_ms": 0, "jitter_px": 0, "accel": 1.0, "decel": 1.0, "metadata": {"kind": "move", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []}},
+                        "path": [{"x": 940, "y": 560, "t": 0.0}, {"x": 976, "y": 584, "t": 0.55}, {"x": 1000, "y": 600, "t": 1.0}],
+                        "detail": "motion executed",
+                        "metadata": {"steps": 3, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                        "event": {"action_id": "move", "kind": "move", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 1000, "y": 600}}},
+                    }
+                },
                 "element": {
                     "type": "文档",
                     "name": "文本编辑器",
@@ -131,6 +174,7 @@ INPUT_MOVE_OUTPUT_EXAMPLES = [
                     "confidence": 0.42,
                     "source": "focused_control",
                 },
+                "target_verification": {"ok": True, "reason": "cursor_reached", "actual_x": 1000, "actual_y": 600},
             },
         },
         "error": None,
@@ -149,8 +193,136 @@ INPUT_DRAG_OUTPUT_EXAMPLES = [
             "payload": {
                 "start": {"x": 900, "y": 525},
                 "end": {"x": 1300, "y": 525},
+                "phase": "verified",
+                "action": {
+                    "kind": "drag",
+                    "start": {"x": 900, "y": 525},
+                    "end": {"x": 1300, "y": 525},
+                    "duration_ms": 1100,
+                    "easing": "ease_out_quad",
+                    "metadata": {"kind": "drag", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []},
+                },
+                "path": [{"x": 900, "y": 525, "t": 0.0}, {"x": 1080, "y": 525, "t": 0.5}, {"x": 1300, "y": 525, "t": 1.0}],
+                "metadata": {"steps": 3, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                "event": {"action_id": "drag", "kind": "drag", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 1300, "y": 525}}},
+                "motion": {
+                    "ok": True,
+                    "phase": "verified",
+                    "action": {"kind": "drag", "start": {"x": 900, "y": 525}, "end": {"x": 1300, "y": 525}, "duration_ms": 1100, "easing": "ease_out_quad", "hover_ms": 120, "jitter_px": 1, "accel": 1.0, "decel": 1.1, "metadata": {"kind": "drag", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []}},
+                    "path": [{"x": 900, "y": 525, "t": 0.0}, {"x": 1080, "y": 525, "t": 0.5}, {"x": 1300, "y": 525, "t": 1.0}],
+                    "detail": "motion executed",
+                    "metadata": {"steps": 3, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                    "event": {"action_id": "drag", "kind": "drag", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 1300, "y": 525}}},
+                },
+                "motion_segments": {
+                    "hover": {
+                        "ok": True,
+                        "phase": "verified",
+                        "action": {"kind": "move", "start": {"x": 860, "y": 500}, "end": {"x": 900, "y": 525}, "duration_ms": 640, "easing": "ease_out_quad", "hover_ms": 120, "jitter_px": 1, "accel": 0.8, "decel": 1.2, "metadata": {"kind": "move", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []}},
+                        "path": [{"x": 860, "y": 500, "t": 0.0}, {"x": 900, "y": 525, "t": 1.0}],
+                        "detail": "motion executed",
+                        "metadata": {"steps": 2, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                        "event": {"action_id": "move", "kind": "move", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 900, "y": 525}}},
+                    },
+                    "execute": {
+                        "ok": True,
+                        "phase": "verified",
+                        "action": {"kind": "drag", "start": {"x": 900, "y": 525}, "end": {"x": 1300, "y": 525}, "duration_ms": 1100, "easing": "ease_out_quad", "hover_ms": 120, "jitter_px": 1, "accel": 1.0, "decel": 1.1, "metadata": {"kind": "drag", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []}},
+                        "path": [{"x": 900, "y": 525, "t": 0.0}, {"x": 1080, "y": 525, "t": 0.5}, {"x": 1300, "y": 525, "t": 1.0}],
+                        "detail": "motion executed",
+                        "metadata": {"steps": 3, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                        "event": {"action_id": "drag", "kind": "drag", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 1300, "y": 525}}},
+                    },
+                },
                 "active_window_before": {"name": "*test.txt - Notepad"},
                 "active_window_after": {"name": "*test.txt - Notepad"},
+                "target_verification": {"ok": True, "reason": "window_changed", "start": {"x": 900, "y": 525}, "end": {"x": 1300, "y": 525}},
+            },
+        },
+        "error": None,
+    }
+]
+
+INPUT_CLICK_OUTPUT_EXAMPLES = [
+    {
+        "ok": True,
+        "tool": "input_click",
+        "message": "ok",
+        "data": {
+            "action": "input_click",
+            "ok": True,
+            "detail": "clicked:618,1564:left:1",
+            "payload": {
+                "x": 618,
+                "y": 1564,
+                "button": "left",
+                "clicks": 1,
+                "phase": "verified",
+                "action": {
+                    "kind": "click",
+                    "start": {"x": 618, "y": 1564},
+                    "end": {"x": 618, "y": 1564},
+                    "duration_ms": 280,
+                    "easing": "ease_out_quad",
+                    "metadata": {"kind": "click", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []},
+                },
+                "path": [{"x": 618, "y": 1564, "t": 0.0}, {"x": 618, "y": 1564, "t": 1.0}],
+                "metadata": {"steps": 2, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                "event": {"action_id": "click", "kind": "click", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 618, "y": 1564}}},
+                "motion": {
+                    "ok": True,
+                    "phase": "verified",
+                    "action": {"kind": "click", "start": {"x": 618, "y": 1564}, "end": {"x": 618, "y": 1564}, "duration_ms": 280, "easing": "ease_out_quad", "hover_ms": 80, "jitter_px": 1, "accel": 1.0, "decel": 1.0, "metadata": {"kind": "click", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []}},
+                    "path": [{"x": 618, "y": 1564, "t": 0.0}, {"x": 618, "y": 1564, "t": 1.0}],
+                    "detail": "motion executed",
+                    "metadata": {"steps": 2, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                    "event": {"action_id": "click", "kind": "click", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 618, "y": 1564}}},
+                },
+                "motion_segments": {
+                    "hover": {
+                        "ok": True,
+                        "phase": "verified",
+                        "action": {"kind": "move", "start": {"x": 590, "y": 1540}, "end": {"x": 618, "y": 1564}, "duration_ms": 640, "easing": "ease_out_quad", "hover_ms": 80, "jitter_px": 1, "accel": 0.8, "decel": 1.2, "metadata": {"kind": "move", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []}},
+                        "path": [{"x": 590, "y": 1540, "t": 0.0}, {"x": 618, "y": 1564, "t": 1.0}],
+                        "detail": "motion executed",
+                        "metadata": {"steps": 2, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                        "event": {"action_id": "move", "kind": "move", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 618, "y": 1564}}},
+                    },
+                    "settle": {
+                        "ok": True,
+                        "phase": "verified",
+                        "action": {"kind": "move", "start": {"x": 618, "y": 1564}, "end": {"x": 618, "y": 1564}, "duration_ms": 640, "easing": "ease_out_quad", "hover_ms": 80, "jitter_px": 1, "accel": 0.9, "decel": 1.1, "metadata": {"kind": "move", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []}},
+                        "path": [{"x": 618, "y": 1564, "t": 0.0}, {"x": 618, "y": 1564, "t": 1.0}],
+                        "detail": "motion executed",
+                        "metadata": {"steps": 2, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                        "event": {"action_id": "move", "kind": "move", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 618, "y": 1564}}},
+                    },
+                    "execute": {
+                        "ok": True,
+                        "phase": "verified",
+                        "action": {"kind": "click", "start": {"x": 618, "y": 1564}, "end": {"x": 618, "y": 1564}, "duration_ms": 280, "easing": "ease_out_quad", "hover_ms": 80, "jitter_px": 1, "accel": 1.0, "decel": 1.0, "metadata": {"kind": "click", "display_id": "MON-1", "scale_factor": 1.0, "monitor_bounds": []}},
+                        "path": [{"x": 618, "y": 1564, "t": 0.0}, {"x": 618, "y": 1564, "t": 1.0}],
+                        "detail": "motion executed",
+                        "metadata": {"steps": 2, "verified": True, "phase_history": ["planned", "animating", "executing", "verifying", "verified"]},
+                        "event": {"action_id": "click", "kind": "click", "phase": "verified", "timestamp_ms": 0, "detail": "motion verified", "metadata": {"target": {"x": 618, "y": 1564}}},
+                    },
+                },
+                "element": {
+                    "type": "Button",
+                    "name": "Start",
+                    "automation_id": "StartMenuButton",
+                    "class_name": "StartMenuButton",
+                    "role": "push button",
+                    "process_id": 1234,
+                    "window_title": "Start",
+                    "found": True,
+                    "confidence": 0.932,
+                    "z_index": 0,
+                    "ancestry_depth": 1,
+                    "bounds": {"left": 600, "top": 1540, "right": 640, "bottom": 1580},
+                    "source": "tree_state",
+                },
+                "target_verification": {"ok": True, "reason": "element_targeted", "button": "left", "clicks": 1},
             },
         },
         "error": None,
@@ -350,9 +522,9 @@ def register_input_tools(registry: ToolRegistry, services: Any) -> None:
         result = services.executor.launch_app(name)
         return input_response("input_launch_app", result.tool or "input_launch_app", result)
 
-    registry.register(ToolSpec(name="input_click", kind="input", params_schema={"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "button": {"type": "string", "default": "left"}, "clicks": {"type": "integer", "default": 1}, "hover_ms": {"type": "integer", "default": 80}, "jitter_px": {"type": "integer", "default": 1}}, "required": ["x", "y"]}, result_schema=RESULT_SCHEMAS["input"], permission="click", executor=input_click, description="Click a coordinate. Use this when the target point is already known and you want a direct pointer action.\n\nParameters: x/y set the target coordinate; button picks left, middle, or right; clicks sets the click count.\nReturns: standard input envelope with action, ok, detail, and payload. Payload includes click coordinates, hover motion, button, click count, and best-effort hit-test element information.\nSafety: verify focus before and after the click.\nBehavior note: use this as part of an observe -> click -> observe loop so the updated desktop state can be verified after the action.\nExamples: {\"x\": 100, \"y\": 200}, {\"x\": 100, \"y\": 200, \"button\": \"right\", \"clicks\": 2}.\n\nRuntime note: document editors and generic text regions may still report sparse element metadata such as type=unknown or found=false when the underlying hit-test cannot resolve a richer UIA node.", param_description="x/y: target coordinate; button: left, middle, or right; clicks: click count.", result_description="Standard input envelope with action, ok, detail, and payload. Payload includes the click coordinates and may include a best-effort element object with hit-test metadata when available.", input_examples=INPUT_EXAMPLES.get("input_click", []), output_examples=[{"ok": True, "tool": "input_click", "message": "ok", "data": {"action": "input_click", "ok": True, "detail": "clicked:1000,600:left:1", "payload": {"x": 1000, "y": 600, "button": "left", "clicks": 1, "element": {"type": "unknown", "name": None, "found": False, "confidence": 0.0}}}, "error": None}, {"ok": True, "tool": "input_click", "message": "ok", "data": {"action": "input_click", "ok": True, "detail": "clicked:618,1564:left:1", "payload": {"x": 618, "y": 1564, "button": "left", "clicks": 1, "element": {"type": "Button", "name": "Start", "automation_id": "StartMenuButton", "class_name": "StartMenuButton", "role": "push button", "process_id": 1234, "window_title": "Start", "found": True, "confidence": 0.932, "z_index": 0, "ancestry_depth": 1, "bounds": {"left": 600, "top": 1540, "right": 640, "bottom": 1580}, "source": "tree_state"}}}, "error": None}], safety_notes="Verify focus before and after the click.", implementation_notes="Delegates to the executor click path.") )
-    registry.register(ToolSpec(name="input_move", kind="input", params_schema={"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}, result_schema=RESULT_SCHEMAS["input"], permission="move", executor=input_move, description="Move the pointer. Use this for hover prep, target acquisition, or drag origin setup.\n\nParameters: x/y set the pointer destination.\nReturns: standard input envelope with the move result.\nSafety: pointer movement only; no application state change.\nBehavior note: payload may include best-effort element metadata when the desktop backend can resolve the hovered surface, but callers should still treat this as a motion primitive and pair it with follow-up observation when precise verification matters.\nExamples: {\"x\": 100, \"y\": 200}.", param_description="x/y: pointer destination.", result_description="Standard input envelope with the move result. Payload may include pointer coordinates plus best-effort element metadata when available.", input_examples=INPUT_EXAMPLES.get("input_move", []), output_examples=INPUT_MOVE_OUTPUT_EXAMPLES, safety_notes="Pointer movement only; no application state change.", implementation_notes="Delegates to the executor move path.") )
-    registry.register(ToolSpec(name="input_drag", kind="input", params_schema={"type": "object", "properties": {"start_x": {"type": "integer"}, "start_y": {"type": "integer"}, "end_x": {"type": "integer"}, "end_y": {"type": "integer"}}, "required": ["start_x", "start_y", "end_x", "end_y"]}, result_schema=RESULT_SCHEMAS["input"], permission="drag", executor=input_drag, description="Drag from one coordinate to another. Use this for selection, reordering, and moving on-screen objects.\n\nParameters: start_x/start_y define the origin; end_x/end_y define the destination.\nReturns: standard input envelope with the drag result.\nSafety: confirm the target actually moved or selected as expected.\nBehavior note: payload may include start/end coordinates and active-window context, but downstream verification should still come from a follow-up snapshot or application-state check.\nExamples: {\"start_x\": 10, \"start_y\": 10, \"end_x\": 100, \"end_y\": 100}.", param_description="start_x/start_y: drag origin; end_x/end_y: drag destination.", result_description="Standard input envelope with the drag result. Payload may include drag coordinates and lightweight before/after window context.", input_examples=INPUT_EXAMPLES.get("input_drag", []), output_examples=INPUT_DRAG_OUTPUT_EXAMPLES, safety_notes="Confirm the target actually moved or selected as expected.", implementation_notes="Delegates to the executor drag path.") )
+    registry.register(ToolSpec(name="input_click", kind="input", params_schema={"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "button": {"type": "string", "default": "left"}, "clicks": {"type": "integer", "default": 1}, "hover_ms": {"type": "integer", "default": 80}, "jitter_px": {"type": "integer", "default": 1}}, "required": ["x", "y"]}, result_schema=RESULT_SCHEMAS["input"], permission="click", executor=input_click, description="Click a coordinate. Use this when the target point is already known and you want a direct pointer action.\n\nParameters: x/y set the target coordinate; button picks left, middle, or right; clicks sets the click count.\nReturns: standard input envelope with action, ok, detail, and payload. Payload now mirrors the motion schema, including phase/action/path/metadata/event, the primary motion block, segmented hover/settle/execute motion, and click-specific verification data.\nSafety: verify focus before and after the click.\nBehavior note: use this as part of an observe -> click -> observe loop so the updated desktop state can be verified after the action. Clients that previously consumed only x/y/button can keep doing that, but newer clients should prefer the unified motion fields for replay and visualization.\nExamples: {\"x\": 100, \"y\": 200}, {\"x\": 100, \"y\": 200, \"button\": \"right\", \"clicks\": 2}.\n\nRuntime note: document editors and generic text regions may still report sparse element metadata such as type=unknown or found=false when the underlying hit-test cannot resolve a richer UIA node.", param_description="x/y: target coordinate; button: left, middle, or right; clicks: click count.", result_description="Standard input envelope with action, ok, detail, and payload. Payload includes the unified motion schema at the top level, a mirrored motion block, motion_segments for hover/settle/execute, click coordinates, best-effort element metadata, and target_verification.", input_examples=INPUT_EXAMPLES.get("input_click", []), output_examples=INPUT_CLICK_OUTPUT_EXAMPLES, safety_notes="Verify focus before and after the click.", implementation_notes="Delegates to the executor click path and preserves both legacy click fields and the normalized motion schema.") )
+    registry.register(ToolSpec(name="input_move", kind="input", params_schema={"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]}, result_schema=RESULT_SCHEMAS["input"], permission="move", executor=input_move, description="Move the pointer. Use this for hover prep, target acquisition, or drag origin setup.\n\nParameters: x/y set the pointer destination.\nReturns: standard input envelope with the move result. Payload now exposes the same phase/action/path/metadata/event shape as motion_execute, plus a mirrored motion block and motion_segments for downstream replay.\nSafety: pointer movement only; no application state change.\nBehavior note: payload may include best-effort element metadata when the desktop backend can resolve the hovered surface, but callers should treat the unified motion fields as the source of truth for visualization and timing.\nExamples: {\"x\": 100, \"y\": 200}.", param_description="x/y: pointer destination.", result_description="Standard input envelope with the move result. Payload includes pointer coordinates, unified motion schema fields, a mirrored motion block, motion_segments.execute, target_verification, and best-effort hovered element metadata when available.", input_examples=INPUT_EXAMPLES.get("input_move", []), output_examples=INPUT_MOVE_OUTPUT_EXAMPLES, safety_notes="Pointer movement only; no application state change.", implementation_notes="Delegates to the executor move path and returns a motion-shaped payload compatible with motion_execute consumers.") )
+    registry.register(ToolSpec(name="input_drag", kind="input", params_schema={"type": "object", "properties": {"start_x": {"type": "integer"}, "start_y": {"type": "integer"}, "end_x": {"type": "integer"}, "end_y": {"type": "integer"}}, "required": ["start_x", "start_y", "end_x", "end_y"]}, result_schema=RESULT_SCHEMAS["input"], permission="drag", executor=input_drag, description="Drag from one coordinate to another. Use this for selection, reordering, and moving on-screen objects.\n\nParameters: start_x/start_y define the origin; end_x/end_y define the destination.\nReturns: standard input envelope with the drag result. Payload now follows the unified motion schema at the top level, keeps the drag-specific start/end and before/after window context, and exposes segmented hover/execute motion for replay.\nSafety: confirm the target actually moved or selected as expected.\nBehavior note: downstream verification should still come from a follow-up snapshot or application-state check, but the motion-shaped payload can now drive timeline viewers, animation replayers, and frontend overlays directly.\nExamples: {\"start_x\": 10, \"start_y\": 10, \"end_x\": 100, \"end_y\": 100}.", param_description="start_x/start_y: drag origin; end_x/end_y: drag destination.", result_description="Standard input envelope with the drag result. Payload includes unified motion schema fields, a mirrored motion block, motion_segments for hover/execute, drag coordinates, before/after window context, and target_verification.", input_examples=INPUT_EXAMPLES.get("input_drag", []), output_examples=INPUT_DRAG_OUTPUT_EXAMPLES, safety_notes="Confirm the target actually moved or selected as expected.", implementation_notes="Delegates to the executor drag path and preserves drag-specific context alongside the normalized motion schema.") )
     registry.register(ToolSpec(name="input_type", kind="input", params_schema={"type": "object", "properties": {"text": {"type": "string"}, "press_enter": {"type": "boolean", "default": False}, "clear": {"type": "boolean", "default": False}, "caret_position": {"type": "string", "default": "idle"}}, "required": ["text"]}, result_schema=RESULT_SCHEMAS["input"], permission="type", executor=input_type, description="Type text into the focused control. Use this when the target field is active and keyboard input is the intended action.\n\nParameters: text is the content to enter; press_enter submits after typing; clear removes the current value first; caret_position hints the expected cursor state.\nReturns: standard input envelope with the typing result. The payload includes the focused control snapshot and an explicit validation block showing whether the focused value changed after typing.\nSafety: switch IME or keyboard layout before typing into localized controls.\nBehavior note: use this as part of an observe -> type -> observe loop so the updated focused control can be verified after the action. If focus is lost, the tool preserves the prior focused_control snapshot in the payload so clients can see the intended target.\nExamples: {\"text\": \"hello\"}, {\"text\": \"hello\", \"press_enter\": true, \"clear\": true}, {\"text\": \"notepad\", \"clear\": false}.", param_description="text: content to type; press_enter: submit after typing; clear: replace existing value; caret_position: start/end/idle hint.", result_description="Standard input envelope with the typing result. Payload includes the focused_control snapshot and validation details, including before/after value change checks.", input_examples=INPUT_EXAMPLES.get("input_type", []), output_examples=[{"ok": True, "tool": "input_type", "message": "ok", "data": {"action": "input_type", "ok": True, "detail": "typed:notepad", "payload": {"text": "notepad", "press_enter": False, "clear": True, "caret_position": "idle", "focused_before": {"name": "打开(O):", "value": "services.msc", "text": "services.msc", "control_type": "编辑", "automation_id": "1001", "class_name": "Edit", "role": 42, "bounds": [126, 1350, 593, 1376], "window_title": "运行", "source": "windows-mcp"}, "focused_after": {"name": "打开(O):", "value": "notepad", "text": "notepad", "control_type": "编辑", "automation_id": "1001", "class_name": "Edit", "role": 42, "bounds": [126, 1350, 593, 1376], "window_title": "运行", "source": "windows-mcp"}, "target_control": {"name": "打开(O):", "value": "services.msc", "text": "services.msc", "control_type": "编辑", "automation_id": "1001", "class_name": "Edit", "role": 42, "bounds": [126, 1350, 593, 1376], "window_title": "运行", "source": "windows-mcp"}, "before_value": "services.msc", "after_value": "notepad", "type_location": {"x": 359, "y": 1363}, "validation": {"checked": True, "field": "focused_control.value", "before_value": "services.msc", "after_value": "notepad", "changed": True, "expected_change": True, "passed": True, "target_control": {"name": "打开(O):", "value": "services.msc", "text": "services.msc", "control_type": "编辑", "automation_id": "1001", "class_name": "Edit", "role": 42, "bounds": [126, 1350, 593, 1376], "window_title": "运行", "source": "windows-mcp"}, "target_value_before": "services.msc", "target_value_after": "notepad", "target_changed": True, "before_control_name": "打开(O):", "after_control_name": "打开(O):"}, "focused_control": {"name": "打开(O):", "value": "notepad", "text": "notepad", "control_type": "编辑", "automation_id": "1001", "class_name": "Edit", "role": 42, "bounds": [126, 1350, 593, 1376], "window_title": "运行", "source": "windows-mcp"}}}, "error": None}], safety_notes="Switch IME or keyboard layout before typing into localized controls.", implementation_notes="Delegates to the executor text-input path and re-snapshots focused control state before and after typing.") )
     registry.register(ToolSpec(name="input_multi_select", kind="input", params_schema={"type": "object", "properties": {"coordinates": {"type": "array"}, "press_ctrl": {"type": "boolean", "default": False}}, "required": ["coordinates"]}, result_schema=RESULT_SCHEMAS["input"], permission="multi_select", executor=input_multi_select, description="Select multiple coordinates in sequence. Use this for list items, grids, and bulk selection flows.\n\nParameters: coordinates is the ordered click list; press_ctrl enables additive selection.\nReturns: standard input envelope with the multi-select result.\nSafety: only use where the target UI supports multi-select behavior.\nBehavior note: the payload reports the attempted target list and whether Ctrl was held, but it does not yet prove that the underlying UI entered a true multi-selected state.\nExamples: {\"coordinates\": [{\"x\": 1, \"y\": 2}, {\"x\": 3, \"y\": 4}]}.", param_description="coordinates: ordered click list; press_ctrl: hold Ctrl while selecting.", result_description="Standard input envelope with the multi-select result. Payload exposes count, press_ctrl, and attempted targets; richer per-click hit results are not guaranteed yet.", input_examples=INPUT_EXAMPLES.get("input_multi_select", []), output_examples=INPUT_MULTI_SELECT_OUTPUT_EXAMPLES, safety_notes="Only use where the target UI supports multi-select behavior.", implementation_notes="Converts the coordinate list into executor-friendly pairs.") )
     registry.register(ToolSpec(name="input_multi_edit", kind="input", params_schema={"type": "object", "properties": {"edits": {"type": "array"}}, "required": ["edits"]}, result_schema=RESULT_SCHEMAS["input"], permission="multi_edit", executor=input_multi_edit, description="Write text into multiple targets in one pass. Use this for form filling and repeated field edits.\n\nParameters: edits is an array of {x, y, text} entries.\nReturns: standard input envelope with the multi-edit result.\nSafety: only use on forms or editors that can accept bulk input safely.\nBehavior note: payload currently exposes the normalized edit count and submitted items, but not a rich per-target verification record.\nExamples: {\"edits\": [{\"x\": 1, \"y\": 2, \"text\": \"a\"}, {\"x\": 3, \"y\": 4, \"text\": \"b\"}]}.", param_description="edits: array of {x, y, text} write targets.", result_description="Standard input envelope with the multi-edit result. Payload includes the total count plus the normalized edit items submitted to the executor.", input_examples=INPUT_EXAMPLES.get("input_multi_edit", []), output_examples=INPUT_MULTI_EDIT_OUTPUT_EXAMPLES, safety_notes="Only use on forms or editors that can accept bulk input safely.", implementation_notes="Normalizes the edit tuples before dispatching them to the executor.") )

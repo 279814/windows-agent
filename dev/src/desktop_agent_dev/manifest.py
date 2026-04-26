@@ -14,6 +14,91 @@ def _chapter(title: str, summary: str, sections: list[dict[str, Any]]) -> dict[s
     }
 
 
+def _input_motion_payload_summary() -> str:
+    return "input_click/input_move/input_drag now expose unified motion-shaped payloads with phase/action/path/metadata/event, motion, and motion_segments."
+
+
+def _lighter_input_payload_summary() -> str:
+    return "input_scroll and multi-* actions remain lighter-dispatch payloads and may still need desktop_snapshot pairing for stronger post-action verification."
+
+
+def _input_handbook_verification_notes() -> list[str]:
+    return [
+        "input_type exposes explicit validation and focused_control snapshots.",
+        "input_shortcut exposes foreground focus before/after plus raw injection_result.",
+        "input_click verification is motion-aware: inspect phase, action, path, event, motion, motion_segments, element, and target_verification together.",
+        "input_move verification is cursor-path aware: inspect phase, action, path, event, motion, motion_segments.execute, and target_verification.",
+        "input_drag verification is segmented: inspect phase, action, path, event, motion, motion_segments.hover, motion_segments.execute, target_verification, and before/after window context when present.",
+        _lighter_input_payload_summary(),
+    ]
+
+
+def _input_operator_guidance_lines() -> list[str]:
+    return [
+        "Read the catalog or tool-handbook before invoking unfamiliar tools.",
+        "Use snapshot tools to observe state before acting.",
+        "Prefer handle-aware verification fields such as verified, matched_by, before_handle, after_handle, verification_mode, and backend_response_code when auditing window-tool results.",
+        f"{_input_motion_payload_summary()} Inspect target_verification and action-specific context alongside those fields.",
+        "input_type and input_shortcut still expose their own stronger verification fields such as focused_control/validation and focus_before/focus_after/injection_result.",
+        _lighter_input_payload_summary().replace("for stronger post-action verification", "for post-action confirmation"),
+    ]
+
+
+def _input_security_notes() -> list[str]:
+    return [
+        "High-risk actions are guarded by the safety gate.",
+        "The server emits read-only documentation resources plus normalized tool metadata for client-side catalogs.",
+        "Motion planning and overlay state resources are additive discovery helpers and do not modify legacy tool execution flows.",
+        "Window-control success is verification-driven: backend success alone is not treated as sufficient when foreground, handle, visibility, or geometry checks disagree.",
+        "input_click/input_move/input_drag now carry unified motion-shaped verification payloads, but clients should still pair them with fresh observations when UI state after the action matters more than cursor trajectory.",
+        "Input actions with lighter payloads such as scroll and multi-* remain safe to expose, but they still benefit from fresh observations when stronger auditability is required.",
+        "Placeholder vision tools are intentionally exposed as TODO/not-implemented so clients can branch to fallback strategies.",
+        "New motion and overlay tools are additive helpers and should not be used to rewrite legacy tool execution flows.",
+        "Resource discovery should include motion_preview and overlay_state so clients can enumerate the new tools without inspecting internal modules.",
+        "phase1 is complete when motion_preview and overlay_state are discoverable through catalog, handbook, tool index, and tool discovery resources.",
+    ]
+
+
+def _manifest_input_verification_semantics() -> dict[str, Any]:
+    return {
+        "motion_shaped_tools": {
+            "tools": ["input_click", "input_move", "input_drag"],
+            "shape": "Unified motion-shaped payload with phase/action/path/metadata/event, motion, and motion_segments.",
+            "guidance": [
+                "input_click: inspect element and target_verification together with the motion fields.",
+                "input_move: inspect motion_segments.execute and target_verification to confirm pointer arrival.",
+                "input_drag: inspect motion_segments.hover, motion_segments.execute, target_verification, and before/after context when present.",
+            ],
+        },
+        "focused_validation_tools": {
+            "tools": ["input_type", "input_shortcut"],
+            "shape": "Action-specific verification payloads centered on focused control changes or foreground shortcut delivery.",
+            "guidance": [
+                "input_type: inspect focused_control and validation.",
+                "input_shortcut: inspect focus_before, focus_after, focus_changed, and injection_result.",
+            ],
+        },
+        "lighter_dispatch_tools": {
+            "tools": ["input_scroll", "input_multi_edit", "input_multi_select"],
+            "shape": "Lighter-dispatch payloads with less direct post-action state proof.",
+            "guidance": [
+                "Pair with desktop_snapshot when post-action UI state matters.",
+            ],
+        },
+        "guidance": "Use the strongest verification fields available for each tool family, and pair lighter payloads with desktop_snapshot for post-action verification.",
+    }
+
+
+def _input_client_hints() -> dict[str, Any]:
+    return {
+        "input_verification_families_documented": True,
+        "input_motion_shaped_tools": ["input_click", "input_move", "input_drag"],
+        "input_focused_validation_tools": ["input_type", "input_shortcut"],
+        "input_lighter_dispatch_tools": ["input_scroll", "input_multi_edit", "input_multi_select"],
+        "input_motion_shaped_payload_fields": ["phase", "action", "path", "metadata", "event", "motion", "motion_segments"],
+    }
+
+
 def build_readme(registry: ToolRegistry) -> dict[str, Any]:
     summary = "Windows desktop agent MCP server for observation, input, window control, motion planning, overlay inspection, and task orchestration, with explicit verification semantics, handle/pid target selection guidance, display/DPI normalization, UAC-aware recovery, failure fallback metadata, discoverability metadata, and TODO placeholders."
     chapter = _chapter(
@@ -44,10 +129,7 @@ def build_readme(registry: ToolRegistry) -> dict[str, Any]:
             {
                 "heading": "Operator Guidance",
                 "content": [
-                    "Read the catalog or tool-handbook before invoking unfamiliar tools.",
-                    "Use snapshot tools to observe state before acting.",
-                    "Prefer handle-aware verification fields such as verified, matched_by, before_handle, after_handle, verification_mode, and backend_response_code when auditing window-tool results.",
-                    "Input tools vary in payload richness: click/type/shortcut expose stronger verification fields, while move/drag/scroll/multi-* actions may need desktop_snapshot pairing for post-action confirmation.",
+                    *_input_operator_guidance_lines(),
                     "motion_preview is read-only planning; inspect path, phase, overlay_state, and metadata before dispatching real cursor motion.",
                     "overlay_state is read-only and reports the latest virtual overlay snapshot without mutating desktop state.",
                     "Window tools accept name, handle, or pid selectors. Targeting precedence is handle > pid > name, so prefer handle in duplicate-title scenarios.",
@@ -143,7 +225,7 @@ def build_capabilities(registry: ToolRegistry) -> dict[str, Any]:
                     "verification_fields_available": True,
                     "window_handle_pid_targeting_available": True,
                     "window_multi_source_verification_documented": True,
-                    "input_payload_richness_varies_by_tool": True,
+                    **_input_client_hints(),
                     "placeholder_tools_require_fallback": True,
                 },
             },
@@ -173,17 +255,7 @@ def build_security(registry: ToolRegistry) -> dict[str, Any]:
             },
             {
                 "heading": "Operating Notes",
-                "content": [
-                    "High-risk actions are guarded by the safety gate.",
-                    "The server emits read-only documentation resources plus normalized tool metadata for client-side catalogs.",
-                    "Motion planning and overlay state resources are additive discovery helpers and do not modify legacy tool execution flows.",
-                    "Window-control success is verification-driven: backend success alone is not treated as sufficient when foreground, handle, visibility, or geometry checks disagree.",
-                    "Input actions with lighter payloads are still safe to expose, but clients should pair them with fresh observations when they need stronger auditability.",
-                    "Placeholder vision tools are intentionally exposed as TODO/not-implemented so clients can branch to fallback strategies.",
-                    "New motion and overlay tools are additive helpers and should not be used to rewrite legacy tool execution flows.",
-                    "Resource discovery should include motion_preview and overlay_state so clients can enumerate the new tools without inspecting internal modules.",
-                    "phase1 is complete when motion_preview and overlay_state are discoverable through catalog, handbook, tool index, and tool discovery resources.",
-                ],
+                "content": _input_security_notes(),
             },
             {
                 "heading": "Policy",
@@ -223,10 +295,7 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
                     "Modern/UWP-style windows may verify via native visibility, iconic/zoomed state, geometry expansion, or matching-window-count deltas.",
                 ],
                 "input_tools": [
-                    "input_type exposes explicit validation and focused_control snapshots.",
-                    "input_shortcut exposes foreground focus before/after plus raw injection_result.",
-                    "input_click may expose hit-test metadata when the backend resolves the clicked surface.",
-                    "move/drag/scroll/multi-* actions may require desktop_snapshot pairing for stronger post-action verification.",
+                    *_input_handbook_verification_notes(),
                 ],
                 "motion_tools": [
                     "motion_preview is read-only planning.",
@@ -250,7 +319,7 @@ def build_tool_handbook(registry: ToolRegistry) -> dict[str, Any]:
             },
             "payload_expectations": {
                 "snapshot": "Rich normalized observation payloads intended for observe-first workflows.",
-                "input": "Payload richness varies by action. Some tools confirm dispatch only; others include focused control, hit-test, or focus-state verification.",
+                "input": f"{_input_motion_payload_summary()} Other input tools range from focused-control validation to lighter-dispatch payloads.",
                 "motion": "motion_preview returns a planned motion path plus overlay_state metadata to help clients inspect intended cursor travel before dispatching action-level motion.",
                 "overlay": "overlay_state returns current virtual cursor and trail state as a read-only inspection surface.",
                 "window": "Payloads include before/after target context, backend responses, and verification-oriented fields.",
@@ -317,9 +386,7 @@ def build_manifest(registry: ToolRegistry) -> dict[str, Any]:
                 "multi_source_verification": "Window tools may verify through status, handle visibility, active-window changes, geometry changes, or matching-window count deltas depending on the action.",
             },
             "input_tools": {
-                "high_signal_tools": ["input_click", "input_type", "input_shortcut"],
-                "dispatch_confirming_tools": ["input_move", "input_drag", "input_scroll", "input_multi_edit", "input_multi_select"],
-                "guidance": "Use validation blocks, focus fields, or hit-test metadata when available; otherwise pair the action with desktop_snapshot for post-action verification.",
+                **_manifest_input_verification_semantics(),
             },
             "placeholder_tools": "ocr_extract, ui_match, vision_capture, and vision_locate are TODO placeholders and intentionally return not_implemented.",
         },

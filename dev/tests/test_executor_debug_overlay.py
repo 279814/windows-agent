@@ -49,7 +49,12 @@ class FakeInterruptionMonitor(NativeUserTakeoverMonitor):
 
 
 def test_click_exports_timeline_and_target_verification() -> None:
-    executor = Executor(backend=CancelBackend(), overlay_renderer=OverlayRenderer(), motion_scheduler=MotionScheduler(debug_show_points=True, debug_show_target=True))
+    executor = Executor(
+        backend=CancelBackend(),
+        overlay_renderer=OverlayRenderer(),
+        motion_scheduler=MotionScheduler(debug_show_points=True, debug_show_target=True),
+        interruption_monitor=FakeInterruptionMonitor([None] * 32),
+    )
 
     result = executor.click(50, 60)
 
@@ -57,10 +62,18 @@ def test_click_exports_timeline_and_target_verification() -> None:
     assert result.payload["execution_timeline"]
     assert result.payload["target_verification"]["ok"] is True
     assert result.payload["overlay_state"]["timeline"]
+    assert result.payload["phase"] == "verified"
+    assert result.payload["action"]["kind"] == "click"
+    assert result.payload["motion_segments"]["execute"]["event"]["phase"] == "verified"
 
 
 def test_drag_exports_timeline_and_target_verification() -> None:
-    executor = Executor(backend=CancelBackend(), overlay_renderer=OverlayRenderer(), motion_scheduler=MotionScheduler(debug_show_points=True, debug_show_target=True))
+    executor = Executor(
+        backend=CancelBackend(),
+        overlay_renderer=OverlayRenderer(),
+        motion_scheduler=MotionScheduler(debug_show_points=True, debug_show_target=True),
+        interruption_monitor=FakeInterruptionMonitor([None] * 32),
+    )
 
     result = executor.drag((10, 10), (100, 120))
 
@@ -68,6 +81,9 @@ def test_drag_exports_timeline_and_target_verification() -> None:
     assert result.payload["execution_timeline"]
     assert result.payload["target_verification"]["ok"] is True
     assert result.payload["overlay_state"]["drag_active"] is False
+    assert result.payload["phase"] == "verified"
+    assert result.payload["action"]["kind"] == "drag"
+    assert result.payload["motion_segments"]["hover"]["action"]["kind"] == "move"
 
 
 def test_motion_execute_exports_unified_timeline_and_supports_local_cancel() -> None:

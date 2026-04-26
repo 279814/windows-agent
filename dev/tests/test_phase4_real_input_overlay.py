@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from desktop_agent_dev.executor import Executor
 from desktop_agent_dev.overlay import OverlayRenderer
+from desktop_agent_dev.user_input_monitor import NativeUserTakeoverMonitor
 
 
 class FakeBackend:
@@ -41,8 +42,19 @@ class FakeBackend:
         return (f"Closed {name}.", 0)
 
 
+class NoopInterruptionMonitor(NativeUserTakeoverMonitor):
+    def begin(self, *, expected_cursor=None, enable_pointer_drift: bool = False) -> None:
+        return None
+
+    def end(self) -> None:
+        return None
+
+    def reason(self, *, expected_cursor=None) -> str | None:
+        return None
+
+
 def test_click_updates_overlay_and_uses_backend() -> None:
-    executor = Executor(backend=FakeBackend(), overlay_renderer=OverlayRenderer())
+    executor = Executor(backend=FakeBackend(), overlay_renderer=OverlayRenderer(), interruption_monitor=NoopInterruptionMonitor())
 
     result = executor.click(100, 200)
 
@@ -52,11 +64,15 @@ def test_click_updates_overlay_and_uses_backend() -> None:
     assert result.payload["overlay_state"]["cursor_x"] == 150
     assert result.payload["overlay_state"]["target_visible"] is True
     assert result.payload["overlay_state"]["status_text"] in {"verified", "click"}
+    assert result.payload["phase"] == "verified"
+    assert result.payload["action"]["kind"] == "click"
+    assert result.payload["event"]["phase"] == "verified"
+    assert set(result.payload["motion_segments"]) == {"hover", "settle", "execute"}
 
 
 def test_move_reaches_backend_without_unboundlocal_error() -> None:
     backend = FakeBackend()
-    executor = Executor(backend=backend, overlay_renderer=OverlayRenderer())
+    executor = Executor(backend=backend, overlay_renderer=OverlayRenderer(), interruption_monitor=NoopInterruptionMonitor())
 
     result = executor.move(100, 200)
 
@@ -66,10 +82,14 @@ def test_move_reaches_backend_without_unboundlocal_error() -> None:
     assert result.payload["overlay_state"]["persistent"] is True
     assert result.payload["overlay_state"]["target_x"] == 150
     assert result.payload["overlay_state"]["target_y"] == 300
+    assert result.payload["phase"] == "verified"
+    assert result.payload["action"]["kind"] == "move"
+    assert result.payload["motion"]["path"] == result.payload["path"]
+    assert set(result.payload["motion_segments"]) == {"execute"}
 
 
 def test_focus_and_type_publish_overlay_state() -> None:
-    executor = Executor(backend=FakeBackend(), overlay_renderer=OverlayRenderer())
+    executor = Executor(backend=FakeBackend(), overlay_renderer=OverlayRenderer(), interruption_monitor=NoopInterruptionMonitor())
 
     focus_result = executor.focus_window("Editor")
     type_result = executor.type_text("hello")
@@ -83,7 +103,7 @@ def test_focus_and_type_publish_overlay_state() -> None:
 
 def test_drag_runs_with_normalized_coordinates() -> None:
     backend = FakeBackend()
-    executor = Executor(backend=backend, overlay_renderer=OverlayRenderer())
+    executor = Executor(backend=backend, overlay_renderer=OverlayRenderer(), interruption_monitor=NoopInterruptionMonitor())
 
     result = executor.drag((10, 10), (100, 120))
 
@@ -92,3 +112,7 @@ def test_drag_runs_with_normalized_coordinates() -> None:
     assert ("drag", (150, 180)) in backend.calls
     assert result.payload["overlay_state"]["target_x"] == 150
     assert result.payload["overlay_state"]["target_y"] == 180
+    assert result.payload["phase"] == "verified"
+    assert result.payload["action"]["kind"] == "drag"
+    assert result.payload["event"]["phase"] == "verified"
+    assert set(result.payload["motion_segments"]) == {"hover", "execute"}

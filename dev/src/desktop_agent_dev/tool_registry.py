@@ -115,11 +115,15 @@ class ToolRegistry:
         if spec.name == "input_shortcut":
             return "Verification is contextual: inspect target_window, focus_before, focus_after, focus_changed, and injection_result to confirm the shortcut landed in the intended foreground context."
         if spec.name == "input_click":
-            return "Payload may include hit-test element metadata when the desktop backend can resolve the clicked surface. Treat missing or weak element metadata as partial verification and pair with desktop_snapshot when precision matters."
-        if spec.name in {"input_move", "input_drag", "input_scroll", "input_multi_edit", "input_multi_select"}:
-            return "The action result confirms dispatch. Payload richness currently varies by executor, so pair with desktop_snapshot or downstream state checks when you need post-action verification."
+            return "Verification is motion-aware: inspect phase, action, path, event, motion, and motion_segments together with element and target_verification. Hit-test element metadata and target_verification provide the direct click outcome, while the unified motion fields describe how the cursor arrived and can drive replay or audit views. Pair with desktop_snapshot when the clicked UI must be re-read after activation."
+        if spec.name == "input_move":
+            return "Verification is cursor-path aware: inspect phase, action, path, event, motion, motion_segments.execute, and target_verification to confirm the pointer reached the intended coordinate. Element metadata remains best-effort hover context, while the motion-shaped payload is the primary source for replay, timing, and visualization."
+        if spec.name == "input_drag":
+            return "Verification is segmented: inspect phase, action, path, event, motion, motion_segments.hover, motion_segments.execute, and target_verification, plus active_window_before/after and focused_control_before/after when present. The motion payload confirms the drag trajectory; post-drag UI state should still be checked with desktop_snapshot or application-specific verification when the drop result matters."
+        if spec.name in {"input_scroll", "input_multi_edit", "input_multi_select"}:
+            return "Verification is lighter-dispatch by design: the payload confirms the attempted action, but it carries less direct post-action state proof than the motion-shaped or focused-validation families. Pair with desktop_snapshot or downstream state checks when UI outcome verification matters."
         if spec.kind == "input":
-            return "Input actions vary in richness. Some tools confirm dispatch only, while planning tools such as motion_preview expose extra overlay and path metadata for pre-flight verification."
+            return "Input actions are organized into motion-shaped, focused-validation, and lighter-dispatch families. Prefer each tool's family-specific verification fields before falling back to desktop_snapshot or downstream state checks."
         if spec.kind == "snapshot":
             return "Read-only observations are already normalized for clients. Prefer active_window, windows, focused_control, and screenshot metadata when verifying state."
         if spec.kind == "task":
@@ -245,7 +249,7 @@ class ToolRegistry:
                 "High-risk actions remain gated by the safety service.",
                 "Tool metadata is normalized for MCP client catalogs and handbooks.",
                 "Window tools support handle/pid-aware targeting and report verification-oriented payload fields for post-action auditing.",
-                "Several input tools are dispatch-confirming by design; pair them with desktop_snapshot when richer post-action verification is required.",
+                "Input tools now fall into three verification families: motion-shaped payloads for click/move/drag, focused-validation payloads for type/shortcut, and lighter-dispatch payloads for scroll/multi-* actions that benefit from desktop_snapshot pairing.",
                 "TODO placeholder vision tools intentionally return not_implemented responses until their pipelines are built.",
                 "New motion and overlay tools are additive and must not alter legacy tool execution paths.",
             ],

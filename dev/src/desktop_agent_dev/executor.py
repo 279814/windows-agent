@@ -320,6 +320,41 @@ class Executor:
             "target_verification": payload.get("target_verification"),
         }
 
+    @staticmethod
+    def _motion_payload_data(bundle: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(bundle, dict):
+            return {}
+        motion = bundle.get("motion")
+        if isinstance(motion, dict):
+            return motion
+        return {}
+
+    def _attach_motion_schema(
+        self,
+        payload: dict[str, Any],
+        *,
+        primary_motion: dict[str, Any] | None,
+        segments: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        motion_data = self._motion_payload_data(primary_motion)
+        if motion_data:
+            payload["motion"] = motion_data
+            payload["phase"] = motion_data.get("phase")
+            payload["action"] = motion_data.get("action")
+            payload["path"] = motion_data.get("path", [])
+            payload["metadata"] = motion_data.get("metadata", {})
+            payload["event"] = motion_data.get("event")
+            payload["detail"] = motion_data.get("detail")
+        if segments:
+            motion_segments: dict[str, dict[str, Any]] = {}
+            for name, segment in segments.items():
+                segment_motion = self._motion_payload_data(segment)
+                if segment_motion:
+                    motion_segments[name] = segment_motion
+            if motion_segments:
+                payload["motion_segments"] = motion_segments
+        return payload
+
     def _display_context(self, context: dict[str, Any] | None = None) -> dict[str, Any]:
         context = context or self._input_context_snapshot()
         monitor_bounds: list[dict[str, int]] = []
@@ -1144,7 +1179,20 @@ class Executor:
             hover_motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(normalized_x, normalized_y), steps=6, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.8, decel=1.2, context=before_context)
             settle_motion = self._drive_motion(kind="move", start=(normalized_x, normalized_y), end=(normalized_x, normalized_y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=0.9, decel=1.1, context=before_context)
             virtual_mouse = self._drive_motion(kind="click", start=(normalized_x, normalized_y), end=(normalized_x, normalized_y), steps=3, hover_ms=hover_ms, jitter_px=jitter_px, accel=1.0, decel=1.0, context=before_context)
-            payload = {"x": normalized_x, "y": normalized_y, "button": button, "clicks": clicks, "element": element, "pre_click_hover": hover_motion, "pre_click_settle": settle_motion, **virtual_mouse}
+            payload = {
+                "x": normalized_x,
+                "y": normalized_y,
+                "button": button,
+                "clicks": clicks,
+                "element": element,
+                "pre_click_hover": hover_motion,
+                "pre_click_settle": settle_motion,
+            }
+            self._attach_motion_schema(
+                payload,
+                primary_motion=virtual_mouse,
+                segments={"hover": hover_motion, "settle": settle_motion, "execute": virtual_mouse},
+            )
             self._overlay_renderer.show()
             self._overlay_renderer.update_cursor(normalized_x, normalized_y)
             self._overlay_renderer.set_target(normalized_x, normalized_y, visible=True)
@@ -1180,7 +1228,8 @@ class Executor:
             context = self._input_context_snapshot()
             normalized_x, normalized_y = self._normalize_input_point((x, y), context)
             motion = self._drive_motion(kind="move", start=(self._motion_scheduler.cursor_state.x, self._motion_scheduler.cursor_state.y), end=(normalized_x, normalized_y), steps=steps, hover_ms=hover_ms, jitter_px=jitter_px, accel=accel, decel=decel, context=context)
-            payload = {"x": normalized_x, "y": normalized_y, "element": self._hit_test_element(normalized_x, normalized_y), **motion}
+            payload = {"x": normalized_x, "y": normalized_y, "element": self._hit_test_element(normalized_x, normalized_y)}
+            self._attach_motion_schema(payload, primary_motion=motion, segments={"execute": motion})
             self._overlay_renderer.show()
             motion_payload = motion.get("motion", {})
             motion_path = motion_payload.get("path", [])
@@ -1218,8 +1267,8 @@ class Executor:
                 "active_window_before": before_context["active_window"],
                 "focused_control_before": before_context["focused_control"],
                 "pre_drag_hover": hover_motion,
-                **virtual_mouse,
             }
+            self._attach_motion_schema(payload, primary_motion=virtual_mouse, segments={"hover": hover_motion, "execute": virtual_mouse})
             self._overlay_renderer.show()
             self._overlay_renderer.set_transition_state("switching", reason="drag in progress")
             self._overlay_renderer.set_target(normalized_end[0], normalized_end[1], visible=True)
