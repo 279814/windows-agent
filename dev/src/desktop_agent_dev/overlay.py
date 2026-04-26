@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .overlay_window import OverlayWindowPresenter, TkOverlayWindow, overlay_window_enabled
+from .overlay_window import OverlayWindowPresenter, create_default_overlay_presenter
 
 
 @dataclass(slots=True)
@@ -46,8 +46,8 @@ class OverlayRenderer:
     def __init__(self, presenter: OverlayWindowPresenter | None = None) -> None:
         self.frame = OverlayFrame()
         self._presenter = presenter
-        if self._presenter is None and overlay_window_enabled():
-            self._presenter = TkOverlayWindow()
+        if self._presenter is None:
+            self._presenter = create_default_overlay_presenter()
         self.frame.metadata.update(
             {
                 "cursor_color": self.frame.cursor_color,

@@ -117,6 +117,28 @@ def test_native_overlay_controller_clamps_window_rect() -> None:
     assert controller.clamp_window_rect(left=90, top=70, width=40, height=30) == (60, 50)
 
 
+def test_native_overlay_controller_collects_descendant_handles() -> None:
+    from desktop_agent_dev.overlay_window import NativeOverlayWindowController
+
+    class FakeWidget:
+        def __init__(self, handle: int, children: list["FakeWidget"] | None = None) -> None:
+            self._handle = handle
+            self._children = children or []
+
+        def winfo_id(self) -> int:
+            return self._handle
+
+        def winfo_children(self) -> list["FakeWidget"]:
+            return list(self._children)
+
+    controller = NativeOverlayWindowController()
+    tree = FakeWidget(1, [FakeWidget(2), FakeWidget(3, [FakeWidget(4)])])
+
+    handles = controller._descendant_handles(tree)
+
+    assert [int(handle.value) for handle in handles] == [2, 3, 4]
+
+
 def test_overlay_publishes_snapshots_to_desktop_presenter() -> None:
     presenter = FakePresenter()
     overlay = OverlayRenderer(presenter=presenter)
@@ -129,3 +151,13 @@ def test_overlay_publishes_snapshots_to_desktop_presenter() -> None:
     assert presenter.frames[-1].cursor_x == 30
     assert presenter.frames[-1].cursor_size == 32
     assert presenter.closed is True
+
+
+def test_default_overlay_presenter_prefers_native_on_windows(monkeypatch) -> None:
+    from desktop_agent_dev.overlay_window import NativeWin32OverlayWindow, create_default_overlay_presenter
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    presenter = create_default_overlay_presenter()
+
+    assert presenter is not None
+    assert isinstance(presenter, NativeWin32OverlayWindow)
