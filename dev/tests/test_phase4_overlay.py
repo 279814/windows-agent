@@ -63,10 +63,27 @@ def test_overlay_defaults_to_persistent_large_red_virtual_cursor() -> None:
     snapshot = overlay.snapshot()
 
     assert snapshot.visible is True
-    assert snapshot.cursor_color == "#ff0000"
-    assert snapshot.cursor_size == 28
+    assert snapshot.cursor_color == "#5eead4"
+    assert snapshot.cursor_size == 24
     assert snapshot.user_cursor_size == 14
     assert snapshot.persistent is True
+
+
+def test_overlay_pointer_shape_and_colorref_helpers_are_stable() -> None:
+    overlay = OverlayRenderer()
+    overlay.update_cursor(64, 96)
+
+    shape = overlay.render_pointer_shape()
+
+    assert len(shape["body"]) == 7
+    assert len(shape["shadow"]) == 7
+    assert len(shape["accent"]) == 3
+
+
+def test_overlay_window_colorref_matches_windows_bgr_layout() -> None:
+    from desktop_agent_dev.overlay_window import TkOverlayWindow
+
+    assert TkOverlayWindow._colorref("#010203") == 0x030201
 
 
 def test_overlay_publishes_snapshots_to_desktop_presenter() -> None:

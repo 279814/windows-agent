@@ -40,9 +40,9 @@ class Executor:
         self._overlay_renderer = overlay_renderer or OverlayRenderer()
         self._task_store = task_store or TaskStore()
         self._overlay_renderer.set_style(
-            cursor_color="#ff0000",
-            user_cursor_color="#3b82f6",
-            cursor_size=28,
+            cursor_color="#5eead4",
+            user_cursor_color="#f59e0b",
+            cursor_size=24,
             user_cursor_size=14,
             persistent=True,
         )

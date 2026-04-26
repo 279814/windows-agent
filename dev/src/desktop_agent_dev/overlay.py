@@ -11,9 +11,9 @@ class OverlayFrame:
     visible: bool = True
     cursor_x: int = 0
     cursor_y: int = 0
-    cursor_color: str = "#ff0000"
-    user_cursor_color: str = "#3b82f6"
-    cursor_size: int = 28
+    cursor_color: str = "#5eead4"
+    user_cursor_color: str = "#f59e0b"
+    cursor_size: int = 24
     user_cursor_size: int = 14
     persistent: bool = True
     pressed: bool = False
@@ -142,6 +142,29 @@ class OverlayRenderer:
             }
         )
         self._publish()
+
+    def render_pointer_shape(self) -> dict[str, Any]:
+        size = max(12, int(self.frame.cursor_size))
+        tip_x = int(self.frame.cursor_x)
+        tip_y = int(self.frame.cursor_y)
+        height = size + 10
+        width = max(10, round(size * 0.58))
+        body = [
+            (tip_x, tip_y),
+            (tip_x, tip_y + height),
+            (tip_x + width, tip_y + round(height * 0.66)),
+            (tip_x + round(width * 0.52), tip_y + round(height * 0.54)),
+            (tip_x + round(width * 0.72), tip_y + height + round(size * 0.28)),
+            (tip_x + round(width * 0.28), tip_y + height + round(size * 0.38)),
+            (tip_x + round(width * 0.08), tip_y + round(height * 0.68)),
+        ]
+        shadow = [(x + 2, y + 3) for x, y in body]
+        accent = [
+            (tip_x + round(width * 0.18), tip_y + round(height * 0.24)),
+            (tip_x + round(width * 0.18), tip_y + round(height * 0.82)),
+            (tip_x + round(width * 0.54), tip_y + round(height * 0.62)),
+        ]
+        return {"shadow": shadow, "body": body, "accent": accent}
 
     def draw_click_ripple(self, x: int, y: int, radius: int = 18) -> None:
         self.frame.click_ripples.append({"x": x, "y": y, "radius": radius})

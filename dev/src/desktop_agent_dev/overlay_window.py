@@ -23,7 +23,13 @@ GWL_EXSTYLE = -20
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_TRANSPARENT = 0x00000020
+WS_EX_NOACTIVATE = 0x08000000
 LWA_COLORKEY = 0x00000001
+HWND_TOPMOST = -1
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+SWP_NOACTIVATE = 0x0010
+SWP_SHOWWINDOW = 0x0040
 
 
 class OverlayWindowPresenter(Protocol):
@@ -40,7 +46,9 @@ class OverlayWindowFrame:
     cursor_x: int
     cursor_y: int
     cursor_color: str
+    user_cursor_color: str
     cursor_size: int
+    user_cursor_size: int
     persistent: bool
     pressed: bool
     target_x: int | None
@@ -48,6 +56,7 @@ class OverlayWindowFrame:
     target_visible: bool
     status_text: str
     trail: list[tuple[int, int]]
+    click_ripples: list[dict[str, int]]
 
 
 def overlay_window_enabled() -> bool:
@@ -78,8 +87,10 @@ class TkOverlayWindow:
             visible=bool(getattr(frame, "visible", True)),
             cursor_x=int(getattr(frame, "cursor_x", 0)),
             cursor_y=int(getattr(frame, "cursor_y", 0)),
-            cursor_color=str(getattr(frame, "cursor_color", "#ff0000")),
-            cursor_size=int(getattr(frame, "cursor_size", 28)),
+            cursor_color=str(getattr(frame, "cursor_color", "#5eead4")),
+            user_cursor_color=str(getattr(frame, "user_cursor_color", "#f59e0b")),
+            cursor_size=int(getattr(frame, "cursor_size", 24)),
+            user_cursor_size=int(getattr(frame, "user_cursor_size", 14)),
             persistent=bool(getattr(frame, "persistent", True)),
             pressed=bool(getattr(frame, "pressed", False)),
             target_x=getattr(frame, "target_x", None),
@@ -87,6 +98,7 @@ class TkOverlayWindow:
             target_visible=bool(getattr(frame, "target_visible", False)),
             status_text=str(getattr(frame, "status_text", "idle")),
             trail=list(getattr(frame, "trail", [])),
+            click_ripples=[dict(ripple) for ripple in getattr(frame, "click_ripples", [])],
         )
         self._ensure_started()
         self._queue.put(overlay_frame)
@@ -169,17 +181,68 @@ class TkOverlayWindow:
                 x1, y1 = trail[index - 1]
                 x2, y2 = trail[index]
                 canvas.create_line(x1, y1, x2, y2, fill=color, width=max(2, radius // 4), smooth=True)
-        outline_width = 4 if frame.pressed else 3
-        canvas.create_oval(x - radius, y - radius, x + radius, y + radius, outline=frame.cursor_color, width=outline_width)
-        inner = max(3, radius // 3)
-        fill_color = self._blend(frame.cursor_color, "#ffffff", 0.15) if frame.pressed else frame.cursor_color
-        canvas.create_oval(x - inner, y - inner, x + inner, y + inner, fill=fill_color, outline=frame.cursor_color, width=1)
-        arm = radius + 8
-        canvas.create_line(x - arm, y, x + arm, y, fill=frame.cursor_color, width=2)
-        canvas.create_line(x, y - arm, x, y + arm, fill=frame.cursor_color, width=2)
+        for ripple in frame.click_ripples[-3:]:
+            ripple_x = int(ripple.get("x", 0)) - left
+            ripple_y = int(ripple.get("y", 0)) - top
+            ripple_radius = max(10, int(ripple.get("radius", 18)))
+            canvas.create_oval(
+                ripple_x - ripple_radius,
+                ripple_y - ripple_radius,
+                ripple_x + ripple_radius,
+                ripple_y + ripple_radius,
+                outline=self._blend(frame.cursor_color, self._bg, 0.25),
+                width=2,
+            )
+        pointer_height = frame.cursor_size + 10
+        pointer_width = max(10, round(frame.cursor_size * 0.58))
+        shadow = [
+            x + 2,
+            y + 3,
+            x + 2,
+            y + pointer_height + 3,
+            x + pointer_width + 2,
+            y + round(pointer_height * 0.66) + 3,
+            x + round(pointer_width * 0.52) + 2,
+            y + round(pointer_height * 0.54) + 3,
+            x + round(pointer_width * 0.72) + 2,
+            y + pointer_height + round(frame.cursor_size * 0.28) + 3,
+            x + round(pointer_width * 0.28) + 2,
+            y + pointer_height + round(frame.cursor_size * 0.38) + 3,
+            x + round(pointer_width * 0.08) + 2,
+            y + round(pointer_height * 0.68) + 3,
+        ]
+        body = [
+            x,
+            y,
+            x,
+            y + pointer_height,
+            x + pointer_width,
+            y + round(pointer_height * 0.66),
+            x + round(pointer_width * 0.52),
+            y + round(pointer_height * 0.54),
+            x + round(pointer_width * 0.72),
+            y + pointer_height + round(frame.cursor_size * 0.28),
+            x + round(pointer_width * 0.28),
+            y + pointer_height + round(frame.cursor_size * 0.38),
+            x + round(pointer_width * 0.08),
+            y + round(pointer_height * 0.68),
+        ]
+        accent = [
+            x + round(pointer_width * 0.18),
+            y + round(pointer_height * 0.24),
+            x + round(pointer_width * 0.18),
+            y + round(pointer_height * 0.82),
+            x + round(pointer_width * 0.54),
+            y + round(pointer_height * 0.62),
+        ]
+        canvas.create_polygon(shadow, fill=self._blend("#020617", self._bg, 0.2), outline="")
+        canvas.create_polygon(body, fill="#f8fafc", outline=frame.cursor_color, width=3 if frame.pressed else 2, joinstyle="round")
+        canvas.create_polygon(accent, fill=self._blend(frame.cursor_color, "#ffffff", 0.35), outline="")
+        glow_radius = radius + (10 if frame.pressed else 6)
+        canvas.create_oval(x - glow_radius, y - glow_radius, x + glow_radius, y + glow_radius, outline=self._blend(frame.cursor_color, self._bg, 0.5), width=2)
         badge_text = frame.status_text[:24]
         badge_w = max(120, 14 + len(badge_text) * 8)
-        canvas.create_rectangle(24, 24, 24 + badge_w, 54, fill="#101418", outline=frame.cursor_color, width=1)
+        canvas.create_rectangle(24, 24, 24 + badge_w, 54, fill="#08111f", outline=self._blend(frame.cursor_color, "#ffffff", 0.2), width=1)
         canvas.create_text(36, 39, text=badge_text, fill="#f8fafc", anchor="w", font=("Segoe UI", 11, "bold"))
 
     def _virtual_screen_geometry(self) -> tuple[int, int, int, int]:
@@ -195,9 +258,11 @@ class TkOverlayWindow:
             hwnd = wintypes.HWND(root.winfo_id())
             user32 = ctypes.windll.user32
             ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
+            ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
             user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
-            ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, ctypes.c_uint(0x00010203), 0, LWA_COLORKEY)
+            color_key = self._colorref(self._bg)
+            user32.SetLayeredWindowAttributes(hwnd, ctypes.c_uint(color_key), 0, LWA_COLORKEY)
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
         except Exception:
             return
 
@@ -214,3 +279,11 @@ class TkOverlayWindow:
         g = round(g1 * (1 - ratio) + g2 * ratio)
         b = round(b1 * (1 - ratio) + b2 * ratio)
         return f"#{r:02x}{g:02x}{b:02x}"
+
+    @staticmethod
+    def _colorref(color: str) -> int:
+        value = color.lstrip("#")
+        red = int(value[0:2], 16)
+        green = int(value[2:4], 16)
+        blue = int(value[4:6], 16)
+        return red | (green << 8) | (blue << 16)
